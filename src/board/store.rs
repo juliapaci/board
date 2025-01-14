@@ -1,11 +1,13 @@
 use raylib::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 // use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use super::board;
 
+#[derive(Serialize, Deserialize)]
 pub struct StoreStructure {
     pub url: String,
     /// from the begining of the html, which img tag is the correct one
@@ -24,8 +26,14 @@ pub struct Store {
 
 impl Store {
     pub fn create(store_path: PathBuf) -> std::io::Result<Self> {
+        _ = std::fs::create_dir(&store_path);
+        let store_path = store_path.join("store.store");
+        if let Ok(_) = File::create_new(&store_path) {
+            std::fs::write(&store_path, "");
+        }
+
         Ok(Self {
-            store: File::open(store_path.join("store.store"))?,
+            store: OpenOptions::new().read(true).write(true).append(true).open(&store_path)?,
             cache: store_path.join(".cache"),
         })
     }
@@ -53,9 +61,9 @@ impl Store {
         //                 .expect("incorrect store structure format")]
         // };
 
-        Ok(board::Item::Image(board::ItemImage::new(
+        Ok(board::Item::Image(board::ItemImage::new(Box::new(
             rl.load_texture_from_image(thread, &Image::load_image("test.png").unwrap())
                 .expect("couldnt load texture"),
-        )))
+        ))))
     }
 }

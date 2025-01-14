@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 copypasta = "0.10.1"
 raylib = "5.0.2"
+serde = { version = "1.0.217", features = ["derive"] }
