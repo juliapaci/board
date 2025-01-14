@@ -1,0 +1,8 @@
+[package]
+name = "board"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+copypasta = "0.10.1"
+raylib = "5.0.2"
