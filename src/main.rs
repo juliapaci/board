@@ -1,11 +1,8 @@
-use copypasta::{ClipboardContext, ClipboardProvider};
 use raylib::prelude::*;
 
 mod board;
 
 fn main() {
-    let mut cb = ClipboardContext::new().unwrap();
-
     let (mut rl, thread) = raylib::init()
         .title("board")
         .resizable()
@@ -21,21 +18,26 @@ fn main() {
         d.clear_background(Color::GRAY);
 
         board.draw(&mut d);
+        board.input(&mut d);
 
-        if d.is_key_pressed(key_from_i32('A' as _).unwrap()) {
-            match cb.get_contents() {
-                Ok(x) => board.add_text(x),
-                Err(_) => todo!(),
+        if d.is_key_pressed(raylib::consts::KeyboardKey::KEY_A) {
+            if let Ok(s) = d.get_clipboard_text() {
+                // TODO: raylib-rs issue the String can be null and i dont know how to check for that
+                (!s.is_empty()).then(|| board.add_text(s));
             }
         }
 
-        if d.is_key_pressed(key_from_i32('S' as _).unwrap()) {
+        if d.is_key_pressed(raylib::consts::KeyboardKey::KEY_S) {
             board.save();
             recently_saved = 2.0;
-        }
-
-        if recently_saved >= 0.0 {
-            d.draw_text("board was saved. see printed logs for any potential errors", 0, 0, 30, Color::WHITE);
+        } else if recently_saved >= 0.0 {
+            d.draw_text(
+                "board was saved. see printed logs for any potential errors",
+                0,
+                0,
+                30,
+                Color::BLACK,
+            );
             recently_saved -= d.get_frame_time();
         }
     }

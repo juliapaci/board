@@ -56,7 +56,11 @@ impl Store {
     }
 
     pub fn add(&mut self, item: &board::Item) -> std::io::Result<()> {
-        writeln!(self.store, "{}", serde_json::to_string_pretty(item).unwrap())?;
+        writeln!(
+            self.store,
+            "{}",
+            serde_json::to_string_pretty(item).unwrap()
+        )?;
 
         Ok(())
     }
