@@ -1,13 +1,9 @@
 use super::store::Store;
 use raylib::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 
 // position is in pixels
-
-trait Drawable {
-    fn draw(&self, d: &mut RaylibDrawHandle);
-}
 
 type TextureHandle = Box<Texture2D>;
 fn empty_texture_handle() -> TextureHandle {
@@ -27,7 +23,7 @@ pub struct ItemImage {
 #[derive(Serialize, Deserialize)]
 pub struct ItemText {
     text: String,
-    size: i32,
+    size: f32,
 
     position: (f32, f32),
 }
@@ -38,41 +34,10 @@ pub enum Item {
     Text(ItemText),
 }
 
-impl Drawable for ItemImage {
-    fn draw(&self, d: &mut RaylibDrawHandle) {
-        d.draw_texture(
-            self.handle.as_ref(),
-            self.position.0 as _,
-            self.position.1 as _,
-            Color::WHITE,
-        );
-    }
-}
-
-impl Drawable for ItemText {
-    fn draw(&self, d: &mut RaylibDrawHandle) {
-        d.draw_text(
-            &self.text,
-            self.position.0 as _,
-            self.position.1 as _,
-            self.size,
-            Color::WHITE,
-        );
-    }
-}
-
-impl Item {
-    fn draw(&self, d: &mut RaylibDrawHandle) {
-        match self {
-            Item::Image(x) => x.draw(d),
-            Item::Text(x) => x.draw(d),
-        };
-    }
-}
-
 pub struct Board {
     store: Store,
     items: Vec<Item>,
+    font: Font,
 }
 
 impl Board {
@@ -82,21 +47,47 @@ impl Board {
         thread: &RaylibThread,
     ) -> std::io::Result<Self> {
         let store = Store::create(store_path)?;
-        let mut items = Vec::with_capacity(BufReader::new(&store.store).lines().count());
+        let items = Vec::with_capacity(BufReader::new(&store.store).lines().count())
+            .iter()
+            .map(|_: &Item| store.read_line(rl, thread).unwrap())
+            .collect();
 
-        items
-            .iter_mut()
-            .enumerate()
-            .map(|(x, i)| *i = store.read_line(x as _, rl, thread).unwrap());
+        Ok(Self {
+            store,
+            items,
+            font: rl
+                .load_font(
+                    &thread,
+                    std::path::PathBuf::new()
+                        .join("..")
+                        .join("fonts")
+                        .join("MeowScript-Regular.ttf")
+                        .into_os_string()
+                        .to_str()
+                        .unwrap(),
+                )
+                .unwrap(),
+        })
+    }
 
-        items.push(Item::Text(ItemText::new("tesslkdajsdljt".to_owned())));
-        items.push(Item::Text(ItemText::new("lkndsc".to_owned())));
-
-        Ok(Self { store, items })
+    #[inline]
+    pub fn add_text(&mut self, text: String) {
+        self.items.push(Item::Text(ItemText::new(text)));
     }
 
     pub fn draw(&self, d: &mut RaylibDrawHandle) {
-        self.items.iter().for_each(|x| x.draw(d));
+        self.items.iter().for_each(|x| match x {
+            Item::Image(x) => x.draw(d),
+            Item::Text(x) => x.draw(d, &self.font),
+        });
+    }
+
+    pub fn save(&mut self) {
+        self.items.iter().for_each(|x| {
+            if let Err(x) = self.store.add(x) {
+                println!("Error: \"{x}\"");
+            }
+        });
     }
 }
 
@@ -107,14 +98,34 @@ impl ItemImage {
             position: (0., 0.),
         }
     }
+
+    fn draw(&self, d: &mut RaylibDrawHandle) {
+        d.draw_texture(
+            self.handle.as_ref(),
+            self.position.0 as _,
+            self.position.1 as _,
+            Color::WHITE,
+        );
+    }
 }
 
 impl ItemText {
     pub fn new(text: String) -> Self {
         Self {
             text,
-            size: 0,
-            position: (0., 0.)
+            size: 100.,
+            position: (0., 0.),
         }
+    }
+
+    fn draw(&self, d: &mut RaylibDrawHandle, font: &Font) {
+        d.draw_text_ex(
+            font,
+            &self.text,
+            Vector2::new(self.position.0, self.position.1),
+            self.size,
+            1.0,
+            Color::WHITE,
+        );
     }
 }
