@@ -1,7 +1,6 @@
 use super::store::Store;
 use raylib::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader};
 
 // position is in pixels
 
@@ -10,7 +9,7 @@ fn empty_texture_handle() -> TextureHandle {
     todo!()
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ItemImage {
     /// path to cached item
     #[serde(skip)]
@@ -21,7 +20,7 @@ pub struct ItemImage {
     size: f32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ItemText {
     text: String,
     size: f32,
@@ -29,14 +28,10 @@ pub struct ItemText {
     position: (f32, f32),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Item {
     Image(ItemImage),
     Text(ItemText),
-}
-
-fn vector2_to_tuple(vec: Vector2) -> (f32, f32) {
-    (vec.x, vec.y)
 }
 
 #[derive(Default)]
@@ -54,16 +49,24 @@ pub struct Board {
 }
 
 impl Board {
-    pub fn create(
-        store_path: std::path::PathBuf,
+    pub fn create<P: AsRef<std::path::Path>>(
+        store_path: P,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
-    ) -> std::io::Result<Self> {
-        let store = Store::create(store_path)?;
-        let items = Vec::with_capacity(BufReader::new(&store.store).lines().count())
-            .iter()
-            .map(|_: &Item| store.read_line(rl, thread).unwrap())
+    ) -> std::io::Result<Self>
+    {
+        let store_path = store_path.as_ref();
+        let mut store = Store::create(store_path)?;
+        let contents: Vec<String> = std::fs::read_to_string(&store_path.join("store.store"))?
+            .lines()
+            .map(String::from)
             .collect();
+        store.clear()?;
+
+        let mut items: Vec<Item> = Vec::<Item>::with_capacity(contents.len());
+        for line in contents.iter() {
+            items.push(store.read_line(line, rl, thread).unwrap())
+        }
 
         Ok(Self {
             store,
@@ -72,7 +75,6 @@ impl Board {
                 .load_font(
                     &thread,
                     std::path::PathBuf::new()
-                        .join("..")
                         .join("fonts")
                         .join("MeowScript-Regular.ttf")
                         .into_os_string()
@@ -120,25 +122,38 @@ impl Board {
             return;
         }
 
-        let mpos = d.get_mouse_position();
-
         // TODO: quadtree optimisations
         if let None = self.state.selected {
             match self.items.iter().position(|x| {
                 match x {
                     Item::Image(i) => Rectangle::new(i.position.0, i.position.1, i.size, i.size),
-                    Item::Text(i) => Rectangle::new(i.position.0, i.position.1, d.measure_text(&i.text, i.size as _) as _, i.size),
+                    Item::Text(i) => Rectangle::new(
+                        i.position.0,
+                        i.position.1,
+                        d.measure_text(&i.text, i.size as _) as _,
+                        i.size,
+                    ),
                 }
-                .check_collision_point_rec(mpos)
+                .check_collision_point_rec(d.get_mouse_position())
             }) {
                 Some(i) => self.state.selected = Some(i),
                 None => return,
             }
         }
 
+        #[inline]
+        fn vector2_to_tuple(vec: Vector2) -> (f32, f32) {
+            (vec.x, vec.y)
+        }
+        #[inline]
+        fn add_tuples(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+            (a.0 + b.0, a.1 + b.1)
+        }
+
+        let mdelta = vector2_to_tuple(d.get_mouse_delta());
         match &mut self.items[self.state.selected.unwrap()] {
-            Item::Image(x) => x.position = vector2_to_tuple(mpos),
-            Item::Text(x) => x.position = vector2_to_tuple(mpos),
+            Item::Image(x) => x.position = add_tuples(x.position, mdelta),
+            Item::Text(x) => x.position = add_tuples(x.position, mdelta),
         }
     }
 

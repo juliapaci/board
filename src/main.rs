@@ -10,12 +10,13 @@ fn main() {
         .log_level(TraceLogLevel::LOG_ERROR)
         .build();
 
-    let mut board = board::board::Board::create("test_store".into(), &mut rl, &thread).unwrap();
+    let mut board = board::board::Board::create("test_store", &mut rl, &thread)
+        .expect("couldnt create board");
 
     let mut recently_saved = 0.0;
     while !rl.window_should_close() {
         let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::GRAY);
+        d.clear_background(Color::new(21, 21, 21, 255));
 
         board.draw(&mut d);
         board.input(&mut d);

@@ -4,7 +4,7 @@ use std::io::Write;
 
 use std::fs::{File, OpenOptions};
 // use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::board;
 
@@ -26,13 +26,16 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn create(store_path: PathBuf) -> std::io::Result<Self> {
+    pub fn create<P>(store_path: P) -> std::io::Result<Self>
+    where
+        P: AsRef<Path>,
+    {
+        let store_path = store_path.as_ref();
         _ = std::fs::create_dir(&store_path);
         let store_file_path = store_path.join("store.store");
         if let Err(_) = File::create_new(&store_file_path) {
-            std::fs::rename(&store_file_path, store_path.join("backup.store"))?;
+            std::fs::copy(&store_file_path, store_path.join("backup.store"))?;
         }
-        std::fs::write(&store_file_path, "")?;
 
         Ok(Self {
             store: OpenOptions::new()
@@ -44,24 +47,33 @@ impl Store {
         })
     }
 
+    pub fn clear(&mut self) -> std::io::Result<()> {
+        self.store.set_len(0)
+    }
+
     pub fn read_line(
         &self,
+        line: &str,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
     ) -> std::io::Result<board::Item> {
-        Ok(board::Item::Image(board::ItemImage::new(Box::new(
-            rl.load_texture_from_image(thread, &Image::load_image("test.png").unwrap())
-                .expect("couldnt load texture"),
-        ))))
+        use board::Item;
+
+        Ok(match serde_json::from_str(line)? {
+            Item::Text(i) => Item::Text(i),
+            Item::Image(i) => Item::Image(board::ItemImage::new(Box::new(
+                rl.load_texture_from_image(thread, &Image::load_image("test.png").unwrap())
+                    .expect("couldnt load texture"),
+            ))),
+        })
     }
 
+    #[inline]
     pub fn add(&mut self, item: &board::Item) -> std::io::Result<()> {
         writeln!(
             self.store,
             "{}",
-            serde_json::to_string_pretty(item).unwrap()
-        )?;
-
-        Ok(())
+            serde_json::to_string(item).unwrap()
+        )
     }
 }
