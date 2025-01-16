@@ -1,48 +1,63 @@
-use raylib::prelude::*;
+use macroquad::prelude::*;
+use miniquad::window::{clipboard_get, quit};
 
 mod board;
 
-fn main() {
-    let (mut rl, thread) = raylib::init()
-        .title("board")
-        .resizable()
-        .vsync()
-        .log_level(TraceLogLevel::LOG_ERROR)
-        .build();
+fn conf() -> Conf {
+    Conf {
+        window_title: "board".to_owned(),
+        window_resizable: true,
+        ..Default::default()
+    }
+}
 
-    let mut board = board::board::Board::create("test_store", &mut rl, &thread)
+#[macroquad::main("conf")]
+async fn main() {
+    prevent_quit();
+
+    let mut board = board::board::Board::create("test_store")
+        .await
         .expect("couldnt create board");
 
     let mut recently_saved = 0.0;
-    while !rl.window_should_close() {
-        let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::new(21, 21, 21, 255));
+    while !is_quit_requested() {
+        if is_key_pressed(KeyCode::Escape) {
+            break;
+        }
 
-        board.draw(&mut d);
-        board.input(&mut d);
+        // clear_background(Color::from_rgba(21, 21, 21, 255));
+        // draw_text(&format!("{}", get_fps()), 0., 0., 20., WHITE);
+        // draw_text("test", 0., 0., 1., WHITE);
+        // println!("{}", get_fps());
 
-        if d.is_key_pressed(raylib::consts::KeyboardKey::KEY_A) {
-            if let Ok(s) = d.get_clipboard_text() {
-                // TODO: raylib-rs issue the String can be null and i dont know how to check for that
-                (!s.is_empty()).then(|| board.add_text(s));
+        board.draw();
+        board.input();
+
+        if is_key_pressed(KeyCode::A) {
+            if let Some(s) = clipboard_get() {
+                if s.starts_with("http") {
+                    board.add_image(&s).await;
+                } else {
+                    board.add_text(s);
+                }
             }
         }
 
-        if d.is_key_pressed(raylib::consts::KeyboardKey::KEY_S) {
-            board.save();
-            recently_saved = 2.0;
+        if is_key_pressed(KeyCode::S) {
+            match board.save() {
+                Ok(_) => recently_saved = 2.0,
+                Err(e) => println!("error while saving{e}"),
+            }
         } else if recently_saved >= 0.0 {
-            d.draw_text(
-                "board was saved. see printed logs for any potential errors",
-                0,
-                0,
-                30,
-                Color::BLACK,
-            );
-            recently_saved -= d.get_frame_time();
+            let mut colour = WHITE;
+            colour.a = recently_saved;
+            draw_text("board was saved", 0.0, 0.0, 30.0, colour);
+            recently_saved -= get_frame_time();
         }
+
+        next_frame().await;
     }
 
-    board.save();
+    // board.save().expect("failed to save");
     println!("auto saved the board");
 }

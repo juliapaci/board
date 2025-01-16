@@ -1,4 +1,4 @@
-use raylib::prelude::*;
+use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -51,18 +51,14 @@ impl Store {
         self.store.set_len(0)
     }
 
-    pub fn read_line(
-        &self,
-        line: &str,
-        rl: &mut RaylibHandle,
-        thread: &RaylibThread,
-    ) -> std::io::Result<board::Item> {
+    pub async fn read_line(&self, line: &str) -> std::io::Result<board::Item> {
         use board::Item;
 
         Ok(match serde_json::from_str(line)? {
             Item::Text(i) => Item::Text(i),
             Item::Image(i) => Item::Image(board::ItemImage::new(Box::new(
-                rl.load_texture_from_image(thread, &Image::load_image("test.png").unwrap())
+                load_texture("test.png")
+                    .await
                     .expect("couldnt load texture"),
             ))),
         })
@@ -70,10 +66,6 @@ impl Store {
 
     #[inline]
     pub fn add(&mut self, item: &board::Item) -> std::io::Result<()> {
-        writeln!(
-            self.store,
-            "{}",
-            serde_json::to_string(item).unwrap()
-        )
+        writeln!(self.store, "{}", serde_json::to_string(item).unwrap())
     }
 }
