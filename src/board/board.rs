@@ -1,11 +1,18 @@
+use std::{env::current_dir, path::PathBuf};
+
 use super::store::Store;
-use macroquad::prelude::*;
+use ggez::{
+    graphics::{self, Canvas, Color, DrawParam, Drawable, Image, Rect, Text},
+    input::mouse,
+    mint::Point2,
+    Context,
+};
 use serde::{Deserialize, Serialize};
 
 // position is in pixels
 
-type TextureHandle = Box<Texture2D>;
-fn empty_texture_handle() -> TextureHandle {
+type ImageHandle = Box<Image>;
+fn empty_texture_handle() -> ImageHandle {
     todo!()
 }
 
@@ -14,10 +21,8 @@ pub struct ItemImage {
     /// path to cached item
     #[serde(skip)]
     #[serde(default = "empty_texture_handle")]
-    handle: TextureHandle,
-
+    handle: ImageHandle,
     position: (f32, f32),
-    size: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -43,13 +48,15 @@ struct BoardState {
 pub struct Board {
     store: Store,
     items: Vec<Item>,
-    font: Font,
 
     state: BoardState,
 }
 
 impl Board {
-    pub async fn create<P: AsRef<std::path::Path>>(store_path: P) -> std::io::Result<Self> {
+    pub fn create<P: AsRef<std::path::Path>>(
+        store_path: P,
+        ctx: &mut Context,
+    ) -> std::io::Result<Self> {
         let store_path = store_path.as_ref();
         let store = Store::create(store_path)?;
         let contents: Vec<String> = std::fs::read_to_string(&store_path.join("store.store"))?
@@ -59,22 +66,17 @@ impl Board {
 
         let mut items: Vec<Item> = Vec::<Item>::with_capacity(contents.len());
         for line in contents.iter() {
-            items.push(store.read_line(line).await.unwrap())
+            items.push(store.read_line(line, ctx)?)
         }
+
+        // ctx.gfx.add_font(
+        //     "fancy font",
+        //     graphics::FontData::from_path(ctx, "fonts/MeowScript-Regular.ttf").unwrap()
+        // );
 
         Ok(Self {
             store,
             items,
-            font: load_ttf_font(
-                std::path::PathBuf::new()
-                    .join("fonts")
-                    .join("MeowScript-Regular.ttf")
-                    .into_os_string()
-                    .to_str()
-                    .unwrap(),
-            )
-            .await
-            .unwrap(),
 
             state: BoardState::default(),
         })
@@ -86,53 +88,76 @@ impl Board {
     }
 
     #[inline]
-    pub async fn add_image(&mut self, url: &str) {
+    pub fn add_image(&mut self, url: &str, ctx: &Context) {
         self.items.push(Item::Image(ItemImage::new(Box::new(
-            load_texture("test.png")
-                .await
-                .expect("couldnt load texture"),
+            graphics::Image::from_path(ctx, "test.png").expect("couldnt load texture"),
         ))));
     }
 
-    pub fn draw(&self) {
+    pub fn draw(&self, c: &mut Canvas, cc: &Context) {
         self.items.iter().for_each(|x| match x {
-            Item::Image(x) => x.draw(),
-            Item::Text(x) => x.draw(&self.font),
+            Item::Image(x) => x.draw(c),
+            Item::Text(x) => x.draw(c),
         });
 
         // debug rectangles
-        self.items.iter().for_each(|x| match x {
-            Item::Image(x) => {
-                draw_rectangle_lines(x.position.0, x.position.1, x.size, x.size, 1.0, RED)
-            }
-            Item::Text(x) => {
-                let dim = measure_text(&x.text, Some(&self.font), 1, x.size);
-                draw_rectangle_lines(x.position.0, x.position.1, dim.width, dim.height, 1.0, RED);
-            }
+        self.items.iter().for_each(|x| {
+            c.draw(
+                &graphics::Mesh::new_rectangle(
+                    cc,
+                    graphics::DrawMode::stroke(1.0),
+                    match x {
+                        Item::Image(x) => Rect::new(
+                            x.position.0,
+                            x.position.1,
+                            x.handle.width() as _,
+                            x.handle.height() as _,
+                        ),
+                        Item::Text(x) => {
+                            let dim = Text::new(&x.text).dimensions(cc).unwrap();
+                            Rect::new(x.position.0, x.position.1, dim.w, dim.h)
+                        }
+                    },
+                    Color::RED,
+                )
+                .expect("couldnt make the rectangle outline thing"),
+                DrawParam::new(),
+            )
         });
     }
 
-    pub fn input(&mut self) {
-        if !is_mouse_button_down(MouseButton::Left) {
+    pub fn input(&mut self, c: &Context) {
+        if !c.mouse.button_pressed(mouse::MouseButton::Left) {
             self.state.selected = None;
             return;
+        }
+
+        #[inline]
+        fn point2_to_tuple<T>(p: Point2<T>) -> (T, T) {
+            (p.x, p.y)
         }
 
         // TODO: quadtree optimisations
         if let None = self.state.selected {
             /// r: (x, y, w, h)
+            #[inline]
             fn inside(p: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
                 (p.0 >= r.0 && p.0 <= r.0 + r.2) && (p.1 >= r.1 && p.1 <= r.1 + r.3)
             }
 
             match self.items.iter().position(|x| {
                 inside(
-                    mouse_position(),
+                    point2_to_tuple::<f32>(c.mouse.position()),
                     match x {
-                        Item::Image(i) => (i.position.0, i.position.1, i.size, i.size),
+                        Item::Image(i) => (
+                            i.position.0,
+                            i.position.1,
+                            i.handle.width() as _,
+                            i.handle.height() as _,
+                        ),
                         Item::Text(i) => {
-                            let dim = measure_text(&i.text, Some(&self.font), 1, i.size);
-                            (i.position.0, i.position.1, dim.width, dim.height)
+                            let dim = Text::new(&i.text).dimensions(c).unwrap();
+                            (i.position.0, i.position.1, dim.w, dim.h)
                         }
                     },
                 )
@@ -148,18 +173,12 @@ impl Board {
                 None => return,
             }
         }
-
-        #[inline]
-        fn vec2_to_tuple(vec: Vec2) -> (f32, f32) {
-            (vec.x, vec.y)
-        }
-
         #[inline]
         fn add_tuples(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
             (a.0 + b.0, a.1 + b.1)
         }
 
-        let mdelta = vec2_to_tuple(mouse_delta_position());
+        let mdelta: (f32, f32) = point2_to_tuple::<f32>(c.mouse.delta());
         match &mut self.items[self.state.selected.unwrap()] {
             Item::Image(x) => x.position = add_tuples(x.position, mdelta),
             Item::Text(x) => x.position = add_tuples(x.position, mdelta),
@@ -177,20 +196,19 @@ impl Board {
 }
 
 impl ItemImage {
-    pub fn new(handle: Box<Texture2D>) -> Self {
+    pub fn new(handle: Box<Image>) -> Self {
         Self {
             handle,
             position: (0., 0.),
-            size: 0.0,
         }
     }
 
-    fn draw(&self) {
-        draw_texture(
+    fn draw(&self, c: &mut Canvas) {
+        c.draw(
             self.handle.as_ref(),
-            self.position.0,
-            self.position.1,
-            WHITE,
+            DrawParam::new()
+                .dest([self.position.0, self.position.1])
+                .color(Color::WHITE),
         );
     }
 }
@@ -199,22 +217,17 @@ impl ItemText {
     pub fn new(text: String) -> Self {
         Self {
             text,
-            size: 100.,
+            size: 1.,
             position: (0., 0.),
         }
     }
 
-    fn draw(&self, font: &Font) {
-        draw_text_ex(
-            &self.text,
-            self.position.0,
-            self.position.1,
-            TextParams {
-                font: Some(font),
-                font_scale: self.size,
-                color: WHITE,
-                ..Default::default()
-            },
+    fn draw(&self, c: &mut Canvas) {
+        c.draw(
+            Text::new(&self.text).set_scale(self.size),
+            DrawParam::new()
+                .color(Color::WHITE)
+                .dest([self.position.0, self.position.1]),
         );
     }
 }

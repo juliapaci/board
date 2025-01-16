@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use ggez::{graphics, Context};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -51,15 +51,13 @@ impl Store {
         self.store.set_len(0)
     }
 
-    pub async fn read_line(&self, line: &str) -> std::io::Result<board::Item> {
+    pub fn read_line(&self, line: &str, c: &Context) -> std::io::Result<board::Item> {
         use board::Item;
 
         Ok(match serde_json::from_str(line)? {
             Item::Text(i) => Item::Text(i),
             Item::Image(i) => Item::Image(board::ItemImage::new(Box::new(
-                load_texture("test.png")
-                    .await
-                    .expect("couldnt load texture"),
+                graphics::Image::from_path(c, "test.png").expect("couldnt load texture"),
             ))),
         })
     }

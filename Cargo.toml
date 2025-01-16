@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = "0.4.13"
+copypasta = "0.10.1"
+ggez = "0.9.3"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.135"
