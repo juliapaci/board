@@ -1,8 +1,6 @@
-use std::{env::current_dir, path::PathBuf};
-
 use super::store::Store;
 use ggez::{
-    graphics::{self, Canvas, Color, DrawParam, Drawable, Image, Rect, Text},
+    graphics::{self, Canvas, Color, DrawParam, Image, Rect, Text},
     input::mouse,
     mint::Point2,
     Context,
@@ -28,7 +26,7 @@ pub struct ItemImage {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ItemText {
     text: String,
-    size: f32,
+    scale: f32,
 
     position: (f32, f32),
 }
@@ -39,10 +37,24 @@ pub enum Item {
     Text(ItemText),
 }
 
-#[derive(Default)]
 struct BoardState {
     // index of selected item in items array
     selected: Option<usize>,
+    // (background, text) colours
+    colours: (Color, Color)
+}
+
+impl BoardState {
+    fn new() -> Self {
+        Self {
+            selected: None,
+            colours: (crate::LIGHT, crate::DARK)
+        }
+    }
+
+    pub fn set_colours(&mut self, c: (Color, Color)) {
+        self.colours = c;
+    }
 }
 
 pub struct Board {
@@ -78,7 +90,7 @@ impl Board {
             store,
             items,
 
-            state: BoardState::default(),
+            state: BoardState::new()
         })
     }
 
@@ -97,11 +109,11 @@ impl Board {
     pub fn draw(&self, c: &mut Canvas, cc: &Context) {
         self.items.iter().for_each(|x| match x {
             Item::Image(x) => x.draw(c),
-            Item::Text(x) => x.draw(c),
+            Item::Text(x) => x.draw(c, self.state.colours.1),
         });
 
         // debug rectangles
-        self.items.iter().for_each(|x| {
+        self.items.iter().enumerate().for_each(|(i, x)| {
             c.draw(
                 &graphics::Mesh::new_rectangle(
                     cc,
@@ -114,11 +126,11 @@ impl Board {
                             x.handle.height() as _,
                         ),
                         Item::Text(x) => {
-                            let dim = Text::new(&x.text).dimensions(cc).unwrap();
-                            Rect::new(x.position.0, x.position.1, dim.w, dim.h)
+                            let dim = x.text().measure(cc).unwrap();
+                            Rect::new(x.position.0, x.position.1, dim.x, dim.y)
                         }
                     },
-                    Color::RED,
+                    if i == self.state.selected.unwrap_or(i + 1) {Color::from_rgb(168, 50, 84)} else {Color::from_rgb(209, 65, 86)},
                 )
                 .expect("couldnt make the rectangle outline thing"),
                 DrawParam::new(),
@@ -156,8 +168,8 @@ impl Board {
                             i.handle.height() as _,
                         ),
                         Item::Text(i) => {
-                            let dim = Text::new(&i.text).dimensions(c).unwrap();
-                            (i.position.0, i.position.1, dim.w, dim.h)
+                            let dim = i.text().measure(c).unwrap();
+                            (i.position.0, i.position.1, dim.x, dim.y)
                         }
                     },
                 )
@@ -193,6 +205,10 @@ impl Board {
             }
         }))
     }
+
+    pub fn set_colours(&mut self, c: (Color, Color)) {
+        self.state.set_colours(c);
+    }
 }
 
 impl ItemImage {
@@ -217,16 +233,21 @@ impl ItemText {
     pub fn new(text: String) -> Self {
         Self {
             text,
-            size: 1.,
+            scale: 100.,
             position: (0., 0.),
         }
     }
 
-    fn draw(&self, c: &mut Canvas) {
+    #[inline]
+    pub fn text(&self) -> Text {
+        Text::new(&self.text).set_scale(self.scale).clone()
+    }
+
+    fn draw(&self, c: &mut Canvas, colour: Color) {
         c.draw(
-            Text::new(&self.text).set_scale(self.size),
+            &self.text(),
             DrawParam::new()
-                .color(Color::WHITE)
+                .color(colour)
                 .dest([self.position.0, self.position.1]),
         );
     }
