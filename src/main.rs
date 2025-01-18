@@ -7,8 +7,8 @@ use copypasta::{ClipboardContext, ClipboardProvider};
 
 mod board;
 
-pub(crate) const LIGHT: Color = Color::new(237./255., 230./255., 230./255., 1.0);
-pub(crate) const DARK: Color = Color::new(36./255., 34./255., 34./255., 1.0);
+pub(crate) const LIGHT: Color = Color::new(237. / 255., 230. / 255., 230. / 255., 1.0);
+pub(crate) const DARK: Color = Color::new(36. / 255., 34. / 255., 34. / 255., 1.0);
 
 fn main() {
     let (mut ctx, event_loop) = ContextBuilder::new("board", "")
@@ -24,7 +24,7 @@ fn main() {
 
 enum Mode {
     LIGHT,
-    DARK
+    DARK,
 }
 
 struct BoardApp {
@@ -33,7 +33,7 @@ struct BoardApp {
 
     recently_saved: f32,
 
-    mode: Mode
+    mode: Mode,
 }
 
 impl BoardApp {
@@ -42,14 +42,14 @@ impl BoardApp {
             board: board::board::Board::create("test_store", ctx).expect("couldnt create board"),
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
             recently_saved: 0.0,
-            mode: Mode::LIGHT
+            mode: Mode::LIGHT,
         })
     }
 
     fn background_colour(&self) -> Color {
         match self.mode {
             Mode::LIGHT => LIGHT,
-            Mode::DARK => DARK
+            Mode::DARK => DARK,
         }
     }
 
@@ -58,7 +58,7 @@ impl BoardApp {
             Mode::LIGHT => {
                 self.board.set_colours((DARK, LIGHT));
                 self.mode = Mode::DARK;
-            },
+            }
             Mode::DARK => {
                 self.board.set_colours((LIGHT, DARK));
                 self.mode = Mode::LIGHT;
@@ -96,33 +96,38 @@ impl EventHandler for BoardApp {
     }
 
     fn key_down_event(
-            &mut self,
-            ctx: &mut Context,
-            input: ggez::input::keyboard::KeyInput,
-            _repeated: bool,
-        ) -> Result<(), ggez::GameError> {
+        &mut self,
+        ctx: &mut Context,
+        input: ggez::input::keyboard::KeyInput,
+        _repeated: bool,
+    ) -> Result<(), ggez::GameError> {
         match input.keycode {
-            Some(KeyCode::A) => if let Ok(s) = self.clipboard.get_contents() {
-                if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
-                    self.board.add_text(s);
-                } else {
-                    self.board.add_image(&s, ctx);
+            Some(KeyCode::A) => {
+                if let Ok(s) = self.clipboard.get_contents() {
+                    if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
+                        self.board.add_text(s);
+                    } else {
+                        self.board.add_image(&s, ctx);
+                    }
                 }
             }
 
             Some(KeyCode::S) => match self.board.save() {
                 Ok(_) => self.recently_saved = 2.0,
                 Err(e) => println!("error while saving{e}"),
-            }
+            },
 
-            Some(KeyCode::Tab) => self.switch_colours(),
+            Some(KeyCode::Tab) => {
+                if input.mods.is_empty() {
+                    self.switch_colours()
+                }
+            }
             Some(KeyCode::Escape) => ctx.request_quit(),
 
             _ => {}
         }
 
         Ok(())
-
     }
 
     fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {

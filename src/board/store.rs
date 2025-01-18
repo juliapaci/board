@@ -1,4 +1,3 @@
-use ggez::{graphics, Context};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -31,7 +30,10 @@ impl Store {
         P: AsRef<Path>,
     {
         let store_path = store_path.as_ref();
+        let cache_path = store_path.join(".cache");
         _ = std::fs::create_dir(&store_path);
+        _ = std::fs::create_dir(&cache_path);
+
         let store_file_path = store_path.join("store.store");
         if let Err(_) = File::create_new(&store_file_path) {
             std::fs::copy(&store_file_path, store_path.join("backup.store"))?;
@@ -43,7 +45,7 @@ impl Store {
                 .write(true)
                 .append(true)
                 .open(&store_file_path)?,
-            cache: store_file_path.join(".cache"),
+            cache: cache_path,
         })
     }
 
@@ -51,14 +53,12 @@ impl Store {
         self.store.set_len(0)
     }
 
-    pub fn read_line(&self, line: &str, c: &Context) -> std::io::Result<board::Item> {
+    pub fn read_line(&self, line: &str, c: &ggez::Context) -> Result<board::Item, String> {
         use board::Item;
 
-        Ok(match serde_json::from_str(line)? {
+        Ok(match serde_json::from_str(line).or(Err("from_str failed".to_owned()))? {
             Item::Text(i) => Item::Text(i),
-            Item::Image(i) => Item::Image(board::ItemImage::new(Box::new(
-                graphics::Image::from_path(c, "test.png").expect("couldnt load texture"),
-            ))),
+            Item::Image(i) => Item::Image(board::Board::get_image_from_url(self, &i.url, c).or(Err("get_image_from_url failed"))?)
         })
     }
 

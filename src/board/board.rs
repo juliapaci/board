@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use super::store::Store;
 use ggez::{
     graphics::{self, Canvas, Color, DrawParam, Image, Rect, Text},
@@ -5,13 +7,14 @@ use ggez::{
     mint::Point2,
     Context,
 };
+use reqwest;
 use serde::{Deserialize, Serialize};
 
 // position is in pixels
 
 type ImageHandle = Box<Image>;
 fn empty_texture_handle() -> ImageHandle {
-    todo!()
+    unreachable!()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -21,6 +24,8 @@ pub struct ItemImage {
     #[serde(default = "empty_texture_handle")]
     handle: ImageHandle,
     position: (f32, f32),
+
+    pub url: String
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -41,14 +46,14 @@ struct BoardState {
     // index of selected item in items array
     selected: Option<usize>,
     // (background, text) colours
-    colours: (Color, Color)
+    colours: (Color, Color),
 }
 
 impl BoardState {
     fn new() -> Self {
         Self {
             selected: None,
-            colours: (crate::LIGHT, crate::DARK)
+            colours: (crate::LIGHT, crate::DARK),
         }
     }
 
@@ -78,19 +83,22 @@ impl Board {
 
         let mut items: Vec<Item> = Vec::<Item>::with_capacity(contents.len());
         for line in contents.iter() {
-            items.push(store.read_line(line, ctx)?)
+            items.push(match store.read_line(line, ctx) {
+                Ok(i) => i,
+                Err(_) => continue
+            })
         }
 
-        // ctx.gfx.add_font(
-        //     "fancy font",
-        //     graphics::FontData::from_path(ctx, "fonts/MeowScript-Regular.ttf").unwrap()
-        // );
+        ctx.gfx.add_font(
+            "fancy font",
+            graphics::FontData::from_path(ctx, "/fonts/MeowScript-Regular.ttf").unwrap(),
+        );
 
         Ok(Self {
             store,
             items,
 
-            state: BoardState::new()
+            state: BoardState::new(),
         })
     }
 
@@ -101,9 +109,15 @@ impl Board {
 
     #[inline]
     pub fn add_image(&mut self, url: &str, ctx: &Context) {
-        self.items.push(Item::Image(ItemImage::new(Box::new(
-            graphics::Image::from_path(ctx, "test.png").expect("couldnt load texture"),
-        ))));
+        self.items.push(Item::Image(
+            match Self::get_image_from_url(&self.store, url, ctx) {
+                Ok(i) => i,
+                Err(e) => {
+                    println!("add_image error: \"{e}\"");
+                    return;
+                }
+            },
+        ));
     }
 
     pub fn draw(&self, c: &mut Canvas, cc: &Context) {
@@ -130,12 +144,122 @@ impl Board {
                             Rect::new(x.position.0, x.position.1, dim.x, dim.y)
                         }
                     },
-                    if i == self.state.selected.unwrap_or(i + 1) {Color::from_rgb(168, 50, 84)} else {Color::from_rgb(209, 65, 86)},
+                    if i == self.state.selected.unwrap_or(i + 1) {
+                        Color::from_rgb(168, 50, 84)
+                    } else {
+                        Color::from_rgb(209, 65, 86)
+                    },
                 )
                 .expect("couldnt make the rectangle outline thing"),
                 DrawParam::new(),
             )
         });
+    }
+
+    // gets the image of the greatest resolution
+    // TODO: use a proper html parser and give options
+    //       of possible images to the user
+    fn get_image_source_from_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let mut body = String::new();
+
+        match reqwest::blocking::get(url) {
+            Ok(b) => body = b.text()?,
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        #[derive(Debug)]
+        struct Image {
+            url: String,
+            resolution: (usize, usize),
+        }
+        use std::cmp::*;
+        impl Ord for Image {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.resolution.cmp(&other.resolution)
+            }
+        }
+
+        impl PartialOrd for Image {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl PartialEq for Image {
+            fn eq(&self, other: &Self) -> bool {
+                self.resolution == other.resolution
+            }
+        }
+
+        impl Eq for Image {}
+
+        let mut image = Image {
+            url: "".to_owned(),
+            resolution: (0, 0),
+        };
+
+        let img_regex = regex::Regex::new("<img.*>").unwrap();
+        // backreferencing the delimiter would be optimal but alas i cant find a crate which supports it
+        // ill prob end up implementing it on my own before switching to a real html parser
+        let url_regex =
+            regex::Regex::new(r#"src(\s)*=(\s)*("|')?(http(s?)://.+\.(jpg|jpeg|png))("|')"#)
+                .unwrap();
+        let width_regex = regex::Regex::new(r"width(\s)*=(\s)*.([0-9]+).").unwrap();
+        let height_regex = regex::Regex::new(r"height(\s)*=(\s)*.([0-9]+).").unwrap();
+        for m in img_regex.find_iter(&body) {
+            let s = m.as_str();
+
+            let Some(url) = url_regex.captures(s) else {
+                continue;
+            };
+
+            let Some(width) = width_regex.captures(s) else {
+                continue;
+            };
+
+            let Some(height) = height_regex.captures(s) else {
+                continue;
+            };
+
+            image = image.max(Image {
+                url: url[4].to_owned(),
+                resolution: (
+                    width[3].parse::<usize>().unwrap_or_default(),
+                    height[3].parse::<usize>().unwrap_or_default(),
+                ),
+            });
+        }
+
+        println!("\n\n chose: {image:?}");
+        Ok(image.url.to_owned())
+    }
+
+    #[inline]
+    pub fn get_path_from_url(url: &str) -> Option<&str> {
+        url.split('/').last()
+    }
+
+    pub fn get_image_from_url(
+        store: &super::store::Store,
+        url: &str,
+        ctx: &Context,
+    ) -> Result<ItemImage, Box<dyn std::error::Error>> {
+        let img_url = Self::get_image_source_from_url(url)?;
+        let img_bytes = reqwest::blocking::get(&img_url)?.bytes()?.to_vec();
+
+        let path = std::path::PathBuf::new()
+            .join(store.cache.clone())
+            .join(Self::get_path_from_url(&img_url).unwrap_or_default());
+        println!("path: {path:?}");
+        let mut file = std::fs::File::create(&path)?;
+        file.write(&img_bytes)?;
+
+        Ok(ItemImage::new(Box::new(
+                    graphics::Image::from_path(ctx, std::path::PathBuf::from("/").join(&path))
+                    .expect("couldnt load texture"),
+        ),
+        img_url
+        ))
     }
 
     pub fn input(&mut self, c: &Context) {
@@ -186,7 +310,7 @@ impl Board {
             }
         }
         #[inline]
-        fn add_tuples(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+        fn add_tuples<T: std::ops::Add<Output = T>>(a: (T, T), b: (T, T)) -> (T, T) {
             (a.0 + b.0, a.1 + b.1)
         }
 
@@ -212,10 +336,11 @@ impl Board {
 }
 
 impl ItemImage {
-    pub fn new(handle: Box<Image>) -> Self {
+    pub fn new(handle: Box<Image>, url: String) -> Self {
         Self {
             handle,
             position: (0., 0.),
+            url
         }
     }
 
