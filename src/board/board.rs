@@ -13,19 +13,16 @@ use serde::{Deserialize, Serialize};
 // position is in pixels
 
 type ImageHandle = Box<Image>;
-fn empty_texture_handle() -> ImageHandle {
-    unreachable!()
-}
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ItemImage {
     /// path to cached item
+    /// only optional because of serialisation
     #[serde(skip)]
-    #[serde(default = "empty_texture_handle")]
-    handle: ImageHandle,
-    position: (f32, f32),
+    handle: Option<ImageHandle>,
+    pub position: (f32, f32),
 
-    pub url: String
+    pub url: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -85,7 +82,10 @@ impl Board {
         for line in contents.iter() {
             items.push(match store.read_line(line, ctx) {
                 Ok(i) => i,
-                Err(_) => continue
+                Err(e) => {
+                    println!("line {line} couldnt be read: {e}");
+                    continue;
+                }
             })
         }
 
@@ -108,16 +108,12 @@ impl Board {
     }
 
     #[inline]
-    pub fn add_image(&mut self, url: &str, ctx: &Context) {
+    pub fn add_image(&mut self, url: &str, ctx: &Context) -> Result<(), Box<dyn std::error::Error>>{
         self.items.push(Item::Image(
-            match Self::get_image_from_url(&self.store, url, ctx) {
-                Ok(i) => i,
-                Err(e) => {
-                    println!("add_image error: \"{e}\"");
-                    return;
-                }
-            },
+            Self::image_from_url(&self.store, &Self::get_image_source_from_url(url)?, ctx)?
         ));
+
+        Ok(())
     }
 
     pub fn draw(&self, c: &mut Canvas, cc: &Context) {
@@ -136,8 +132,8 @@ impl Board {
                         Item::Image(x) => Rect::new(
                             x.position.0,
                             x.position.1,
-                            x.handle.width() as _,
-                            x.handle.height() as _,
+                            x.handle().width() as _,
+                            x.handle().height() as _,
                         ),
                         Item::Text(x) => {
                             let dim = x.text().measure(cc).unwrap();
@@ -230,7 +226,6 @@ impl Board {
             });
         }
 
-        println!("\n\n chose: {image:?}");
         Ok(image.url.to_owned())
     }
 
@@ -239,31 +234,75 @@ impl Board {
         url.split('/').last()
     }
 
-    pub fn get_image_from_url(
+    pub fn image_from_url(
         store: &super::store::Store,
         url: &str,
         ctx: &Context,
     ) -> Result<ItemImage, Box<dyn std::error::Error>> {
-        let img_url = Self::get_image_source_from_url(url)?;
-        let img_bytes = reqwest::blocking::get(&img_url)?.bytes()?.to_vec();
+        let img_bytes = reqwest::blocking::get(url)?.bytes()?.to_vec();
 
         let path = std::path::PathBuf::new()
             .join(store.cache.clone())
-            .join(Self::get_path_from_url(&img_url).unwrap_or_default());
-        println!("path: {path:?}");
+            .join(Self::get_path_from_url(url).unwrap_or_default());
         let mut file = std::fs::File::create(&path)?;
         file.write(&img_bytes)?;
 
-        Ok(ItemImage::new(Box::new(
-                    graphics::Image::from_path(ctx, std::path::PathBuf::from("/").join(&path))
+        Ok(ItemImage::new(
+            Box::new(
+                graphics::Image::from_path(ctx, std::path::PathBuf::from("/").join(&path))
                     .expect("couldnt load texture"),
-        ),
-        img_url
+            ),
+            url.to_owned(),
         ))
     }
 
-    pub fn input(&mut self, c: &Context) {
-        if !c.mouse.button_pressed(mouse::MouseButton::Left) {
+    pub fn set_selection(&mut self, selection: Option<usize>) {
+        self.state.selected = selection;
+
+        match selection {
+            Some(i) => {
+                // push to last so it gets drawn ontop
+                let last = self.items.len() - 1;
+                self.items.swap(i, last);
+
+                // self.state.selected = Some(i)
+                self.state.selected = Some(last)
+            }
+            None => return,
+        }
+    }
+
+    /// index of which item is selected
+    pub fn select(&self, pos: (f32, f32), c: &Context) -> Option<usize> {
+        // TODO: quadtree optimisations
+
+        /// r: (x, y, w, h)
+        #[inline]
+        fn inside(p: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
+            (p.0 >= r.0 && p.0 <= r.0 + r.2) && (p.1 >= r.1 && p.1 <= r.1 + r.3)
+        }
+
+        self.items.iter().position(|x| {
+            inside(
+                pos,
+                match x {
+                    Item::Image(i) => (
+                        i.position.0,
+                        i.position.1,
+                        i.handle().width() as _,
+                        i.handle().height() as _,
+                    ),
+                    Item::Text(i) => {
+                        let dim = i.text().measure(c).unwrap();
+                        (i.position.0, i.position.1, dim.x, dim.y)
+                    }
+                },
+            )
+        })
+    }
+
+    pub fn manage(&mut self, c: &Context) {
+        if !c.mouse.button_pressed(mouse::MouseButton::Left) || self.state.selected == None {
             self.state.selected = None;
             return;
         }
@@ -273,42 +312,6 @@ impl Board {
             (p.x, p.y)
         }
 
-        // TODO: quadtree optimisations
-        if let None = self.state.selected {
-            /// r: (x, y, w, h)
-            #[inline]
-            fn inside(p: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
-                (p.0 >= r.0 && p.0 <= r.0 + r.2) && (p.1 >= r.1 && p.1 <= r.1 + r.3)
-            }
-
-            match self.items.iter().position(|x| {
-                inside(
-                    point2_to_tuple::<f32>(c.mouse.position()),
-                    match x {
-                        Item::Image(i) => (
-                            i.position.0,
-                            i.position.1,
-                            i.handle.width() as _,
-                            i.handle.height() as _,
-                        ),
-                        Item::Text(i) => {
-                            let dim = i.text().measure(c).unwrap();
-                            (i.position.0, i.position.1, dim.x, dim.y)
-                        }
-                    },
-                )
-            }) {
-                Some(i) => {
-                    // push to last so it gets drawn ontop
-                    let last = self.items.len() - 1;
-                    self.items.swap(i, last);
-
-                    // self.state.selected = Some(i)
-                    self.state.selected = Some(last)
-                }
-                None => return,
-            }
-        }
         #[inline]
         fn add_tuples<T: std::ops::Add<Output = T>>(a: (T, T), b: (T, T)) -> (T, T) {
             (a.0 + b.0, a.1 + b.1)
@@ -336,21 +339,31 @@ impl Board {
 }
 
 impl ItemImage {
-    pub fn new(handle: Box<Image>, url: String) -> Self {
+    pub fn new(handle: ImageHandle, url: String) -> Self {
         Self {
-            handle,
+            handle: Some(handle),
             position: (0., 0.),
-            url
+            url,
         }
+    }
+
+    pub fn handle<'a>(&'a self) -> &'a ImageHandle {
+        // this should never be None so its okay to unwrap
+        self.handle.as_ref().unwrap()
     }
 
     fn draw(&self, c: &mut Canvas) {
         c.draw(
-            self.handle.as_ref(),
+            self.handle().as_ref(),
             DrawParam::new()
                 .dest([self.position.0, self.position.1])
                 .color(Color::WHITE),
         );
+    }
+
+    pub fn with_position(mut self, pos: (f32, f32)) -> Self {
+        self.position = pos;
+        self
     }
 }
 

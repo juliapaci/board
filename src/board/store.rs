@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 
 use std::fs::{File, OpenOptions};
-// use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
 use super::board;
@@ -56,10 +55,15 @@ impl Store {
     pub fn read_line(&self, line: &str, c: &ggez::Context) -> Result<board::Item, String> {
         use board::Item;
 
-        Ok(match serde_json::from_str(line).or(Err("from_str failed".to_owned()))? {
-            Item::Text(i) => Item::Text(i),
-            Item::Image(i) => Item::Image(board::Board::get_image_from_url(self, &i.url, c).or(Err("get_image_from_url failed"))?)
-        })
+        Ok(
+            match serde_json::from_str(line).or(Err("from_str failed"))? {
+                Item::Text(i) => Item::Text(i),
+                Item::Image(i) => Item::Image(
+                    board::Board::image_from_url(self, &i.url, c)
+                        .or(Err("get_image_from_url failed"))?.with_position(i.position),
+                ),
+            },
+        )
     }
 
     #[inline]

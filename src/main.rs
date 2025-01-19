@@ -69,7 +69,7 @@ impl BoardApp {
 
 impl EventHandler for BoardApp {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-        self.board.input(ctx);
+        self.board.manage(ctx);
 
         Ok(())
     }
@@ -107,7 +107,9 @@ impl EventHandler for BoardApp {
                     if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
                         self.board.add_text(s);
                     } else {
-                        self.board.add_image(&s, ctx);
+                        if let Err(e) = self.board.add_image(&s, ctx) {
+                            println!("Error: {e}");
+                        }
                     }
                 }
             }
@@ -125,6 +127,20 @@ impl EventHandler for BoardApp {
             Some(KeyCode::Escape) => ctx.request_quit(),
 
             _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn mouse_button_down_event(
+        &mut self,
+        ctx: &mut Context,
+        button: event::MouseButton,
+        x: f32,
+        y: f32,
+    ) -> Result<(), ggez::GameError> {
+        if button == event::MouseButton::Left {
+            self.board.set_selection(self.board.select((x, y), ctx))
         }
 
         Ok(())
