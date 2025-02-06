@@ -1,20 +1,9 @@
-use serde::{Deserialize, Serialize};
 use std::io::Write;
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use super::board;
-
-#[derive(Serialize, Deserialize)]
-pub struct StoreStructure {
-    pub url: String,
-    /// from the begining of the html, which img tag is the correct one
-    /// TODO: some tag identifier
-    pub img_id: u16,
-
-    pub item: super::board::Item,
-}
 
 pub struct Store {
     /// file path listing all the items
@@ -58,11 +47,20 @@ impl Store {
         Ok(
             match serde_json::from_str(line).or(Err("from_str failed"))? {
                 Item::Text(i) => Item::Text(i),
-                Item::Image(i) => Item::Image(
-                    board::Board::image_from_url(self, &i.url, c)
-                        .or(Err("get_image_from_url failed"))?
-                        .with_position(i.position),
-                ),
+                Item::Image(i) => {
+                    Item::Image(if self.is_cached(board::Board::name_from_url(&i.url)) {
+                        board::ItemImage::from_path(
+                            self.cache.clone().join(board::Board::name_from_url(&i.url)),
+                            &i.url,
+                            c,
+                        )
+                        .or(Err("failed to load image from path"))?
+                    } else {
+                        board::Board::image_from_url(self, &i.url, c)
+                            .or(Err("get_image_from_url failed"))?
+                    })
+                    .with_position(i.position)
+                }
             },
         )
     }
@@ -70,5 +68,10 @@ impl Store {
     #[inline]
     pub fn add(&mut self, item: &board::Item) -> std::io::Result<()> {
         writeln!(self.store, "{}", serde_json::to_string(item).unwrap())
+    }
+
+    #[inline]
+    pub fn is_cached(&self, name: &str) -> bool {
+        self.cache.join(name).exists()
     }
 }

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 // position is in pixels
 
+// TODO: dont allocate for image and own it instead. better for caching when drawing the stuff
 type ImageHandle = Box<Image>;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -162,7 +163,7 @@ impl Board {
     // TODO: use a proper html parser and give options
     //       of possible images to the user
     fn get_image_source_from_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let mut body = String::new();
+        let body;
 
         match reqwest::blocking::get(url) {
             Ok(b) => body = b.text()?,
@@ -214,11 +215,9 @@ impl Board {
             let Some(url) = url_regex.captures(s) else {
                 continue;
             };
-
             let Some(width) = width_regex.captures(s) else {
                 continue;
             };
-
             let Some(height) = height_regex.captures(s) else {
                 continue;
             };
@@ -236,8 +235,8 @@ impl Board {
     }
 
     #[inline]
-    pub fn get_path_from_url(url: &str) -> Option<&str> {
-        url.split('/').last()
+    pub fn name_from_url(url: &str) -> &str {
+        url.split('/').last().unwrap_or(url)
     }
 
     pub fn image_from_url(
@@ -247,19 +246,11 @@ impl Board {
     ) -> Result<ItemImage, Box<dyn std::error::Error>> {
         let img_bytes = reqwest::blocking::get(url)?.bytes()?.to_vec();
 
-        let path = std::path::PathBuf::new()
-            .join(store.cache.clone())
-            .join(Self::get_path_from_url(url).unwrap_or_default());
+        let path = store.cache.join(Self::name_from_url(url));
         let mut file = std::fs::File::create(&path)?;
         file.write(&img_bytes)?;
 
-        Ok(ItemImage::new(
-            Box::new(
-                graphics::Image::from_path(ctx, std::path::PathBuf::from("/").join(&path))
-                    .expect("couldnt load image"),
-            ),
-            url.to_owned(),
-        ))
+        ItemImage::from_path(path, url, ctx).map_err(Box::from)
     }
 
     pub fn set_selection(&mut self, selection: Option<usize>) {
@@ -367,9 +358,14 @@ impl ItemImage {
         );
     }
 
-    pub fn with_position(mut self, pos: (f32, f32)) -> Self {
-        self.position = pos;
-        self
+    pub fn from_path(path: std::path::PathBuf, url: &str, ctx: &Context) -> ggez::GameResult<Self> {
+        Ok(ItemImage::new(
+            Box::new(graphics::Image::from_path(
+                ctx,
+                std::path::PathBuf::from("/").join(path.clone()),
+            )?),
+            url.to_owned(),
+        ))
     }
 }
 
@@ -394,5 +390,16 @@ impl ItemText {
                 .color(colour)
                 .dest([self.position.0, self.position.1]),
         );
+    }
+}
+
+impl Item {
+    pub fn with_position(mut self, pos: (f32, f32)) -> Self {
+        match self {
+            Item::Text(ref mut i) => i.position = pos,
+            Item::Image(ref mut i) => i.position = pos,
+        }
+
+        self
     }
 }

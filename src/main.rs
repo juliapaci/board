@@ -1,5 +1,5 @@
 use ggez::event::{self, EventHandler};
-use ggez::graphics::{self, Color, Text};
+use ggez::graphics::{self, Color};
 use ggez::input::keyboard::{KeyCode, KeyMods};
 use ggez::{Context, ContextBuilder, GameResult};
 
@@ -11,6 +11,8 @@ mod notifications;
 
 pub(crate) const LIGHT: Color = Color::new(237. / 255., 230. / 255., 230. / 255., 1.0);
 pub(crate) const DARK: Color = Color::new(36. / 255., 34. / 255., 34. / 255., 1.0);
+
+const NOTIFICATION_TIME: f32 = std::f32::consts::FRAC_PI_2;
 
 fn main() {
     let (mut ctx, event_loop) = ContextBuilder::new("board", "")
@@ -53,7 +55,7 @@ impl BoardApp {
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
 
             mode: Mode::LIGHT,
-            notifications: notifications::Notifications::with_colour(LIGHT),
+            notifications: notifications::Notifications::with_colour(DARK),
         })
     }
 
@@ -117,20 +119,28 @@ impl EventHandler for BoardApp {
         match input.keycode {
             Some(KeyCode::A) => {
                 if let Ok(s) = self.clipboard.get_contents() {
+                    let kind: &str;
                     if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
                         self.board.add_text(s);
+                        kind = "text"
                     } else {
                         if let Err(e) = self.board.add_image(&s, ctx) {
                             println!("Error: {e}");
                         }
+                        kind = "image"
                     }
+
+                    self.notifications.add(notifications::MyNotification::new(
+                        format!("added {kind}"),
+                        NOTIFICATION_TIME,
+                    ));
                 }
             }
 
             Some(KeyCode::S) => match self.board.save() {
                 Ok(_) => self.notifications.add(notifications::MyNotification::new(
                     "board was saved".to_owned(),
-                    std::f32::consts::FRAC_PI_2,
+                    NOTIFICATION_TIME,
                 )),
                 Err(e) => println!("error while saving: {e}"),
             },
