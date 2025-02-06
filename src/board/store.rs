@@ -60,7 +60,8 @@ impl Store {
                 Item::Text(i) => Item::Text(i),
                 Item::Image(i) => Item::Image(
                     board::Board::image_from_url(self, &i.url, c)
-                        .or(Err("get_image_from_url failed"))?.with_position(i.position),
+                        .or(Err("get_image_from_url failed"))?
+                        .with_position(i.position),
                 ),
             },
         )

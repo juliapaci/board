@@ -108,10 +108,16 @@ impl Board {
     }
 
     #[inline]
-    pub fn add_image(&mut self, url: &str, ctx: &Context) -> Result<(), Box<dyn std::error::Error>>{
-        self.items.push(Item::Image(
-            Self::image_from_url(&self.store, &Self::get_image_source_from_url(url)?, ctx)?
-        ));
+    pub fn add_image(
+        &mut self,
+        url: &str,
+        ctx: &Context,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.items.push(Item::Image(Self::image_from_url(
+            &self.store,
+            &Self::get_image_source_from_url(url)?,
+            ctx,
+        )?));
 
         Ok(())
     }
@@ -250,7 +256,7 @@ impl Board {
         Ok(ItemImage::new(
             Box::new(
                 graphics::Image::from_path(ctx, std::path::PathBuf::from("/").join(&path))
-                    .expect("couldnt load texture"),
+                    .expect("couldnt load image"),
             ),
             url.to_owned(),
         ))

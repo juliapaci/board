@@ -6,6 +6,8 @@ use ggez::{Context, ContextBuilder, GameResult};
 use copypasta::{ClipboardContext, ClipboardProvider};
 
 mod board;
+mod camera;
+mod notifications;
 
 pub(crate) const LIGHT: Color = Color::new(237. / 255., 230. / 255., 230. / 255., 1.0);
 pub(crate) const DARK: Color = Color::new(36. / 255., 34. / 255., 34. / 255., 1.0);
@@ -28,21 +30,30 @@ enum Mode {
 }
 
 struct BoardApp {
+    // board stuff
     board: board::board::Board,
     clipboard: ClipboardContext,
 
-    recently_saved: f32,
-
+    // other context stuff
     mode: Mode,
+    notifications: notifications::Notifications<notifications::MyNotification>,
 }
 
 impl BoardApp {
     fn new(ctx: &mut Context) -> GameResult<Self> {
         Ok(Self {
-            board: board::board::Board::create("test_store", ctx).expect("couldnt create board"),
+            board: board::board::Board::create(
+                std::env::args()
+                    .collect::<Vec<String>>()
+                    .get(1)
+                    .unwrap_or(&"test_store".to_owned()),
+                ctx,
+            )
+            .expect("couldnt create board"),
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
-            recently_saved: 0.0,
+
             mode: Mode::LIGHT,
+            notifications: notifications::Notifications::with_colour(LIGHT),
         })
     }
 
@@ -53,14 +64,25 @@ impl BoardApp {
         }
     }
 
+    fn opposite_colour(&self) -> Color {
+        match self.mode {
+            Mode::LIGHT => DARK,
+            Mode::DARK => LIGHT,
+        }
+    }
+
     fn switch_colours(&mut self) {
         match self.mode {
             Mode::LIGHT => {
                 self.board.set_colours((DARK, LIGHT));
+                self.notifications.set_colour(LIGHT);
+
                 self.mode = Mode::DARK;
             }
             Mode::DARK => {
                 self.board.set_colours((LIGHT, DARK));
+                self.notifications.set_colour(DARK);
+
                 self.mode = Mode::LIGHT;
             }
         };
@@ -70,6 +92,8 @@ impl BoardApp {
 impl EventHandler for BoardApp {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         self.board.manage(ctx);
+        self.notifications
+            .update_all(ctx.time.delta().as_secs_f32());
 
         Ok(())
     }
@@ -79,18 +103,7 @@ impl EventHandler for BoardApp {
 
         self.board.draw(&mut canvas, ctx);
 
-        if self.recently_saved >= 0.0 {
-            let mut colour = Color::WHITE;
-            colour.a = self.recently_saved;
-            canvas.draw(
-                Text::new("board was saved").set_scale(30.0),
-                graphics::DrawParam::new()
-                    .color(colour)
-                    .dest([0.0, 0.0])
-                    .rotation(self.recently_saved),
-            );
-            self.recently_saved -= ctx.time.delta().as_secs_f32();
-        }
+        self.notifications.display_all(&mut canvas);
 
         canvas.finish(ctx)
     }
@@ -115,8 +128,11 @@ impl EventHandler for BoardApp {
             }
 
             Some(KeyCode::S) => match self.board.save() {
-                Ok(_) => self.recently_saved = 2.0,
-                Err(e) => println!("error while saving{e}"),
+                Ok(_) => self.notifications.add(notifications::MyNotification::new(
+                    "board was saved".to_owned(),
+                    std::f32::consts::FRAC_PI_2,
+                )),
+                Err(e) => println!("error while saving: {e}"),
             },
 
             Some(KeyCode::Tab) => {
