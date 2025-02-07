@@ -49,17 +49,15 @@ impl Store {
                 Item::Text(i) => Item::Text(i),
                 Item::Image(i) => {
                     Item::Image(if self.is_cached(board::Board::name_from_url(&i.url)) {
-                        board::ItemImage::from_path(
-                            self.cache.clone().join(board::Board::name_from_url(&i.url)),
-                            &i.url,
-                            c,
-                        )
-                        .or(Err("failed to load image from path"))?
+                        board::ItemImage::from_path(self, &i.url, c)
+                            .or(Err("failed to load image from path"))?
                     } else {
                         board::Board::image_from_url(self, &i.url, c)
                             .or(Err("get_image_from_url failed"))?
                     })
                     .with_position(i.position)
+                    .with_scale(i.scale)
+                    .with_rotation(i.rotation)
                 }
             },
         )

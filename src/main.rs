@@ -114,24 +114,27 @@ impl EventHandler for BoardApp {
         &mut self,
         ctx: &mut Context,
         input: ggez::input::keyboard::KeyInput,
-        _repeated: bool,
+        repeated: bool,
     ) -> Result<(), ggez::GameError> {
+        // dont care for holding anything down
+        if repeated {
+            return Ok(());
+        }
+
         match input.keycode {
             Some(KeyCode::A) => {
                 if let Ok(s) = self.clipboard.get_contents() {
-                    let kind: &str;
+                    // TODO: pase a path -> load from file
                     if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
                         self.board.add_text(s);
-                        kind = "text"
                     } else {
                         if let Err(e) = self.board.add_image(&s, ctx) {
                             println!("Error: {e}");
                         }
-                        kind = "image"
                     }
 
                     self.notifications.add(notifications::MyNotification::new(
-                        format!("added {kind}"),
+                        format!("added {}", self.board.get(self.board.len() - 1).unwrap()),
                         NOTIFICATION_TIME,
                     ));
                 }
@@ -144,6 +147,17 @@ impl EventHandler for BoardApp {
                 )),
                 Err(e) => println!("error while saving: {e}"),
             },
+
+            Some(KeyCode::X) => {
+                if let Some(i) = self.board.selected() {
+                    self.notifications.add(notifications::MyNotification::new(
+                        format!("removed item {i} ({})", self.board.get(i).unwrap()),
+                        NOTIFICATION_TIME
+                    ));
+
+                    self.board.remove(i)
+                }
+            }
 
             Some(KeyCode::Tab) => {
                 if input.mods.is_empty() {

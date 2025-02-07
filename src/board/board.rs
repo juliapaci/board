@@ -3,7 +3,7 @@ use std::io::Write;
 use super::store::Store;
 use ggez::{
     graphics::{self, Canvas, Color, DrawParam, Image, Rect, Text},
-    input::mouse,
+    input::{keyboard::KeyCode, mouse},
     mint::Point2,
     Context,
 };
@@ -12,16 +12,15 @@ use serde::{Deserialize, Serialize};
 
 // position is in pixels
 
-// TODO: dont allocate for image and own it instead. better for caching when drawing the stuff
-type ImageHandle = Box<Image>;
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ItemImage {
     /// path to cached item
     /// only optional because of serialisation
     #[serde(skip)]
-    handle: Option<ImageHandle>,
+    handle: Option<Image>,
     pub position: (f32, f32),
+    pub scale: (f32, f32),
+    pub rotation: f32,
 
     pub url: String,
 }
@@ -29,9 +28,10 @@ pub struct ItemImage {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ItemText {
     text: String,
-    scale: f32,
 
     position: (f32, f32),
+    scale: f32,
+    rotation: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -240,7 +240,7 @@ impl Board {
     }
 
     pub fn image_from_url(
-        store: &super::store::Store,
+        store: &Store,
         url: &str,
         ctx: &Context,
     ) -> Result<ItemImage, Box<dyn std::error::Error>> {
@@ -250,28 +250,27 @@ impl Board {
         let mut file = std::fs::File::create(&path)?;
         file.write(&img_bytes)?;
 
-        ItemImage::from_path(path, url, ctx).map_err(Box::from)
+        ItemImage::from_path(store, url, ctx).map_err(Box::from)
     }
 
     pub fn set_selection(&mut self, selection: Option<usize>) {
-        self.state.selected = selection;
-
-        match selection {
+        self.state.selected = match selection {
             Some(i) => {
                 // push to last so it gets drawn ontop
                 let last = self.items.len() - 1;
                 self.items.swap(i, last);
 
                 // self.state.selected = Some(i)
-                self.state.selected = Some(last)
+                Some(last)
             }
-            None => return,
+            None => None,
         }
     }
 
-    /// index of which item is selected
+    /// index corresponding to the selected item
     pub fn select(&self, pos: (f32, f32), c: &Context) -> Option<usize> {
         // TODO: quadtree optimisations
+        // TODO: take into account rotation
 
         /// r: (x, y, w, h)
         #[inline]
@@ -299,7 +298,7 @@ impl Board {
     }
 
     pub fn manage(&mut self, c: &Context) {
-        if !c.mouse.button_pressed(mouse::MouseButton::Left) || self.state.selected == None {
+        if !c.mouse.button_pressed(mouse::MouseButton::Left) || self.state.selected.is_none() {
             self.state.selected = None;
             return;
         }
@@ -314,18 +313,61 @@ impl Board {
             (a.0 + b.0, a.1 + b.1)
         }
 
-        let mdelta: (f32, f32) = point2_to_tuple::<f32>(c.mouse.delta());
-        match &mut self.items[self.state.selected.unwrap()] {
-            Item::Image(x) => x.position = add_tuples(x.position, mdelta),
-            Item::Text(x) => x.position = add_tuples(x.position, mdelta),
+        #[inline]
+        fn div_tuple<T: std::ops::Div<Output = T> + std::marker::Copy>(t: (T, T), f: T) -> (T, T) {
+            (t.0/f, t.1/f)
         }
+
+        let mdelta = point2_to_tuple(c.mouse.delta());
+        let item = &mut self.items[self.state.selected.unwrap()];
+
+        // scale
+        if c.keyboard.is_key_pressed(KeyCode::E) {
+            match item {
+                Item::Image(x) => x.scale = add_tuples(x.scale, div_tuple(mdelta, 100.0)),
+                Item::Text(x) => x.scale += mdelta.0 + mdelta.1
+            }
+        }
+
+        // rotation
+        else if c.keyboard.is_key_pressed(KeyCode::R) {
+            match item {
+                Item::Image(x) => x.rotation += (mdelta.0 + mdelta.1)/180.,
+                Item::Text(x) => x.rotation += (mdelta.0 + mdelta.1)/180.
+            }
+        }
+
+        // position
+        else {
+            match item {
+                Item::Image(x) => x.position = add_tuples(x.position, mdelta),
+                Item::Text(x) => x.position = add_tuples(x.position, mdelta),
+            }
+        }
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.state.selected
+    }
+
+    pub fn remove(&mut self, i: usize) {
+        self.items.remove(i);
+        self.state.selected = None;
+    }
+
+    pub fn get(&self, i: usize) -> Option<&Item> {
+        self.items.get(i)
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
     }
 
     pub fn save(&mut self) -> std::io::Result<()> {
         self.store.clear()?;
         Ok(self.items.iter().for_each(|x| {
-            if let Err(x) = self.store.add(x) {
-                println!("Error: \"{x}\"");
+            if let Err(e) = self.store.add(x) {
+                println!("Error saving an item ({x:?}): \"{e}\"");
             }
         }))
     }
@@ -336,34 +378,40 @@ impl Board {
 }
 
 impl ItemImage {
-    pub fn new(handle: ImageHandle, url: String) -> Self {
+    pub fn new(handle: Image, url: String) -> Self {
         Self {
             handle: Some(handle),
             position: (0., 0.),
+            scale: (1., 1.),
+            rotation: 0.,
             url,
         }
     }
 
-    pub fn handle<'a>(&'a self) -> &'a ImageHandle {
+    pub fn handle<'a>(&'a self) -> &'a Image {
         // this should never be None so its okay to unwrap
         self.handle.as_ref().unwrap()
     }
 
     fn draw(&self, c: &mut Canvas) {
         c.draw(
-            self.handle().as_ref(),
+            self.handle(),
             DrawParam::new()
                 .dest([self.position.0, self.position.1])
+                .scale([self.scale.0, self.scale.1])
+                .rotation(self.rotation)
                 .color(Color::WHITE),
         );
     }
 
-    pub fn from_path(path: std::path::PathBuf, url: &str, ctx: &Context) -> ggez::GameResult<Self> {
+    pub fn from_path(store: &Store, url: &str, ctx: &Context) -> ggez::GameResult<Self> {
         Ok(ItemImage::new(
-            Box::new(graphics::Image::from_path(
+            graphics::Image::from_path(
                 ctx,
-                std::path::PathBuf::from("/").join(path.clone()),
-            )?),
+                std::path::PathBuf::from("/")
+                    .join(store.cache.clone())
+                    .join(Board::name_from_url(url)),
+            )?,
             url.to_owned(),
         ))
     }
@@ -373,8 +421,9 @@ impl ItemText {
     pub fn new(text: String) -> Self {
         Self {
             text,
-            scale: 100.,
             position: (0., 0.),
+            scale: 100.,
+            rotation: 0.0
         }
     }
 
@@ -387,8 +436,9 @@ impl ItemText {
         c.draw(
             &self.text(),
             DrawParam::new()
+                .dest([self.position.0, self.position.1])
+                .rotation(self.rotation)
                 .color(colour)
-                .dest([self.position.0, self.position.1]),
         );
     }
 }
@@ -401,5 +451,33 @@ impl Item {
         }
 
         self
+    }
+
+    /// for [`Item::Text`] only the `scale.0` is used
+    pub fn with_scale(mut self, scale: (f32, f32)) -> Self {
+        match self {
+            Item::Text(ref mut i) => i.scale = scale.0,
+            Item::Image(ref mut i) => i.scale = scale
+        }
+
+        self
+    }
+
+    pub fn with_rotation(mut self, rotation: f32) -> Self {
+        match self {
+            Item::Text(ref mut i) => i.rotation = rotation,
+            Item::Image(ref mut i) => i.rotation = rotation
+        }
+
+        self
+    }
+}
+
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            Item::Text(_) => "Text",
+            Item::Image(_) => "Image"
+        })
     }
 }
