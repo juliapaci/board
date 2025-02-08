@@ -1,10 +1,12 @@
 use std::io::Write;
 
+use crate::camera::Camera;
+
 use super::store::Store;
 use ggez::{
+    event::MouseButton,
     graphics::{self, Canvas, Color, DrawParam, Image, Rect, Text},
-    input::{keyboard::KeyCode, mouse},
-    mint::Point2,
+    input::keyboard::KeyCode,
     Context,
 };
 use reqwest;
@@ -40,9 +42,16 @@ pub enum Item {
     Text(ItemText),
 }
 
+#[derive(Clone, Copy)]
+pub enum Selectable {
+    Item(usize), // for item management
+    Board,       // for camera movements
+}
+
 struct BoardState {
+    last_press: (f32, f32),
     // index of selected item in items array
-    selected: Option<usize>,
+    selected: Option<Selectable>,
     // (background, text) colours
     colours: (Color, Color),
 }
@@ -50,6 +59,7 @@ struct BoardState {
 impl BoardState {
     fn new() -> Self {
         Self {
+            last_press: (0.0, 0.0),
             selected: None,
             colours: (crate::LIGHT, crate::DARK),
         }
@@ -64,6 +74,7 @@ pub struct Board {
     store: Store,
     items: Vec<Item>,
 
+    pub camera: Camera,
     state: BoardState,
 }
 
@@ -100,6 +111,7 @@ impl Board {
             items,
 
             state: BoardState::new(),
+            camera: Camera::default(),
         })
     }
 
@@ -124,31 +136,31 @@ impl Board {
     }
 
     pub fn draw(&self, c: &mut Canvas, cc: &Context) {
-        self.items.iter().for_each(|x| match x {
-            Item::Image(x) => x.draw(c),
-            Item::Text(x) => x.draw(c, self.state.colours.1),
+        self.screen_iter(cc).for_each(|x| match x {
+            Item::Image(x) => x.draw(self.camera, c),
+            Item::Text(x) => x.draw(self.camera, c, self.state.colours.1),
         });
+    }
 
+    pub fn draw_bounds(&self, c: &mut Canvas, cc: &Context) {
         // debug rectangles
-        self.items.iter().enumerate().for_each(|(i, x)| {
+        self.screen_iter(cc).enumerate().for_each(|(i, x)| {
             c.draw(
                 &graphics::Mesh::new_rectangle(
                     cc,
                     graphics::DrawMode::stroke(1.0),
-                    match x {
-                        Item::Image(x) => Rect::new(
-                            x.position.0,
-                            x.position.1,
-                            x.handle().width() as _,
-                            x.handle().height() as _,
-                        ),
-                        Item::Text(x) => {
-                            let dim = x.text().measure(cc).unwrap();
-                            Rect::new(x.position.0, x.position.1, dim.x, dim.y)
+                    Rect::new(
+                        x.to_rect(self.camera, cc).0,
+                        x.to_rect(self.camera, cc).1,
+                        x.to_rect(self.camera, cc).2,
+                        x.to_rect(self.camera, cc).3,
+                    ),
+                    if let Some(Selectable::Item(s)) = self.state.selected {
+                        if s == i {
+                            Color::from_rgb(168, 50, 84)
+                        } else {
+                            Color::from_rgb(209, 65, 86)
                         }
-                    },
-                    if i == self.state.selected.unwrap_or(i + 1) {
-                        Color::from_rgb(168, 50, 84)
                     } else {
                         Color::from_rgb(209, 65, 86)
                     },
@@ -253,18 +265,26 @@ impl Board {
         ItemImage::from_path(store, url, ctx).map_err(Box::from)
     }
 
-    pub fn set_selection(&mut self, selection: Option<usize>) {
+    pub fn set_selection(&mut self, selection: Selectable) {
         self.state.selected = match selection {
-            Some(i) => {
+            Selectable::Item(i) => {
                 // push to last so it gets drawn ontop
                 let last = self.items.len() - 1;
                 self.items.swap(i, last);
 
                 // self.state.selected = Some(i)
-                Some(last)
+                Some(Selectable::Item(last))
             }
-            None => None,
+
+            Selectable::Board => Some(selection),
         }
+    }
+
+    // iterater containing items only on screen
+    fn screen_iter<'a>(&'a self, c: &'a Context) -> impl Iterator<Item = &'a Item> {
+        self.items
+            .iter()
+            .filter(|i| self.camera.contains(i.to_rect(self.camera, c), c))
     }
 
     /// index corresponding to the selected item
@@ -272,40 +292,23 @@ impl Board {
         // TODO: quadtree optimisations
         // TODO: take into account rotation
 
-        /// r: (x, y, w, h)
+        /// rect `r`: (x, y, w, h)
         #[inline]
         fn inside(p: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
             (p.0 >= r.0 && p.0 <= r.0 + r.2) && (p.1 >= r.1 && p.1 <= r.1 + r.3)
         }
 
-        self.items.iter().position(|x| {
-            inside(
-                pos,
-                match x {
-                    Item::Image(i) => (
-                        i.position.0,
-                        i.position.1,
-                        i.handle().width() as _,
-                        i.handle().height() as _,
-                    ),
-                    Item::Text(i) => {
-                        let dim = i.text().measure(c).unwrap();
-                        (i.position.0, i.position.1, dim.x, dim.y)
-                    }
-                },
-            )
-        })
+        self.screen_iter(c)
+            .position(|x| inside(pos, x.to_rect(self.camera, c)))
     }
 
     pub fn manage(&mut self, c: &Context) {
-        if !c.mouse.button_pressed(mouse::MouseButton::Left) || self.state.selected.is_none() {
+        if (!c.mouse.button_pressed(MouseButton::Left)
+            && !c.mouse.button_pressed(MouseButton::Right))
+            || self.state.selected.is_none()
+        {
             self.state.selected = None;
             return;
-        }
-
-        #[inline]
-        fn point2_to_tuple<T>(p: Point2<T>) -> (T, T) {
-            (p.x, p.y)
         }
 
         #[inline]
@@ -314,39 +317,66 @@ impl Board {
         }
 
         #[inline]
+        fn sub_tuples<T: std::ops::Sub<Output = T>>(a: (T, T), b: (T, T)) -> (T, T) {
+            (a.0 - b.0, a.1 - b.1)
+        }
+
+        #[inline]
         fn div_tuple<T: std::ops::Div<Output = T> + std::marker::Copy>(t: (T, T), f: T) -> (T, T) {
-            (t.0/f, t.1/f)
+            (t.0 / f, t.1 / f)
         }
 
-        let mdelta = point2_to_tuple(c.mouse.delta());
-        let item = &mut self.items[self.state.selected.unwrap()];
+        let mdelta = (c.mouse.delta().x, c.mouse.delta().y);
+        match self.state.selected.unwrap() {
+            Selectable::Item(i) => {
+                let item = &mut self.items[i];
 
-        // scale
-        if c.keyboard.is_key_pressed(KeyCode::E) {
-            match item {
-                Item::Image(x) => x.scale = add_tuples(x.scale, div_tuple(mdelta, 100.0)),
-                Item::Text(x) => x.scale += mdelta.0 + mdelta.1
+                // scale
+                if c.keyboard.is_key_pressed(KeyCode::E)
+                    || (c.mouse.button_pressed(MouseButton::Left)
+                        && c.mouse.button_pressed(MouseButton::Right))
+                {
+                    match item {
+                        Item::Image(x) => x.scale = add_tuples(x.scale, div_tuple(mdelta, 100.0)),
+                        Item::Text(x) => x.scale += mdelta.0 + mdelta.1,
+                    }
+                }
+                // rotation
+                else if c.keyboard.is_key_pressed(KeyCode::R)
+                    || (c.mouse.button_pressed(MouseButton::Right)
+                        && !c.mouse.button_pressed(MouseButton::Left))
+                {
+                    match item {
+                        Item::Image(x) => x.rotation += (mdelta.0 + mdelta.1) / 180.,
+                        Item::Text(x) => x.rotation += (mdelta.0 + mdelta.1) / 180.,
+                    }
+                }
+                // position
+                else {
+                    match item {
+                        Item::Image(x) => x.position = add_tuples(x.position, mdelta),
+                        Item::Text(x) => x.position = add_tuples(x.position, mdelta),
+                    }
+                }
             }
-        }
 
-        // rotation
-        else if c.keyboard.is_key_pressed(KeyCode::R) {
-            match item {
-                Item::Image(x) => x.rotation += (mdelta.0 + mdelta.1)/180.,
-                Item::Text(x) => x.rotation += (mdelta.0 + mdelta.1)/180.
-            }
-        }
-
-        // position
-        else {
-            match item {
-                Item::Image(x) => x.position = add_tuples(x.position, mdelta),
-                Item::Text(x) => x.position = add_tuples(x.position, mdelta),
+            Selectable::Board => {
+                if c.mouse.button_pressed(MouseButton::Left) {
+                    self.camera.centre = add_tuples(self.camera.centre, mdelta)
+                } else if c.mouse.button_pressed(MouseButton::Right) {
+                    self.camera.centre = add_tuples(
+                        self.camera.centre,
+                        div_tuple(sub_tuples(
+                            self.state.last_press,
+                            (c.mouse.position().x, c.mouse.position().y),
+                        ), 10.0),
+                    )
+                }
             }
         }
     }
 
-    pub fn selected(&self) -> Option<usize> {
+    pub fn selected(&self) -> Option<Selectable> {
         self.state.selected
     }
 
@@ -375,6 +405,10 @@ impl Board {
     pub fn set_colours(&mut self, c: (Color, Color)) {
         self.state.set_colours(c);
     }
+
+    pub fn set_last_press(&mut self, p: (f32, f32)) {
+        self.state.last_press = p;
+    }
 }
 
 impl ItemImage {
@@ -393,15 +427,36 @@ impl ItemImage {
         self.handle.as_ref().unwrap()
     }
 
-    fn draw(&self, c: &mut Canvas) {
+    #[inline]
+    pub fn world_position(&self, camera: Camera) -> (f32, f32) {
+        (
+            (self.position.0 + camera.centre.0) * camera.zoom,
+            (self.position.1 + camera.centre.1) * camera.zoom,
+        )
+    }
+
+    #[inline]
+    pub fn world_scale(&self, camera: Camera) -> (f32, f32) {
+        (self.scale.0 * camera.zoom, self.scale.1 * camera.zoom)
+    }
+
+    fn draw(&self, cam: Camera, c: &mut Canvas) {
         c.draw(
             self.handle(),
             DrawParam::new()
-                .dest([self.position.0, self.position.1])
-                .scale([self.scale.0, self.scale.1])
+                .dest([self.world_position(cam).0, self.world_position(cam).1])
+                .scale([self.world_scale(cam).0, self.world_scale(cam).1])
                 .rotation(self.rotation)
                 .color(Color::WHITE),
         );
+    }
+    pub fn to_rect(&self, cam: Camera) -> (f32, f32, f32, f32) {
+        (
+            self.world_position(cam).0,
+            self.world_position(cam).1,
+            self.world_scale(cam).0 * self.handle().width() as f32,
+            self.world_scale(cam).1 * self.handle().height() as f32,
+        )
     }
 
     pub fn from_path(store: &Store, url: &str, ctx: &Context) -> ggez::GameResult<Self> {
@@ -423,23 +478,43 @@ impl ItemText {
             text,
             position: (0., 0.),
             scale: 100.,
-            rotation: 0.0
+            rotation: 0.0,
         }
     }
 
     #[inline]
-    pub fn text(&self) -> Text {
-        Text::new(&self.text).set_scale(self.scale).clone()
+    pub fn text(&self, camera: Camera) -> Text {
+        Text::new(&self.text)
+            .set_scale(self.scale * camera.zoom)
+            .clone()
     }
 
-    fn draw(&self, c: &mut Canvas, colour: Color) {
+    #[inline]
+    pub fn world_position(&self, camera: Camera) -> (f32, f32) {
+        (
+            (self.position.0 + camera.centre.0) * camera.zoom,
+            (self.position.1 + camera.centre.1) * camera.zoom,
+        )
+    }
+
+    fn draw(&self, cam: Camera, c: &mut Canvas, colour: Color) {
         c.draw(
-            &self.text(),
+            &self.text(cam),
             DrawParam::new()
-                .dest([self.position.0, self.position.1])
+                .dest([self.world_position(cam).0, self.world_position(cam).1])
                 .rotation(self.rotation)
-                .color(colour)
+                .color(colour),
         );
+    }
+
+    pub fn to_rect(&self, cam: Camera, c: &Context) -> (f32, f32, f32, f32) {
+        let dim = self.text(cam).measure(c).unwrap();
+        (
+            self.world_position(cam).0,
+            self.world_position(cam).1,
+            dim.x,
+            dim.y,
+        )
     }
 }
 
@@ -457,7 +532,7 @@ impl Item {
     pub fn with_scale(mut self, scale: (f32, f32)) -> Self {
         match self {
             Item::Text(ref mut i) => i.scale = scale.0,
-            Item::Image(ref mut i) => i.scale = scale
+            Item::Image(ref mut i) => i.scale = scale,
         }
 
         self
@@ -466,18 +541,29 @@ impl Item {
     pub fn with_rotation(mut self, rotation: f32) -> Self {
         match self {
             Item::Text(ref mut i) => i.rotation = rotation,
-            Item::Image(ref mut i) => i.rotation = rotation
+            Item::Image(ref mut i) => i.rotation = rotation,
         }
 
         self
+    }
+
+    pub fn to_rect(&self, cam: Camera, c: &Context) -> (f32, f32, f32, f32) {
+        match self {
+            Self::Text(i) => i.to_rect(cam, c),
+            Self::Image(i) => i.to_rect(cam),
+        }
     }
 }
 
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            Item::Text(_) => "Text",
-            Item::Image(_) => "Image"
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                Item::Text(_) => "Text",
+                Item::Image(_) => "Image",
+            }
+        )
     }
 }

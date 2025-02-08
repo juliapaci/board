@@ -1,3 +1,4 @@
+use board::board::Selectable;
 use ggez::event::{self, EventHandler};
 use ggez::graphics::{self, Color};
 use ggez::input::keyboard::{KeyCode, KeyMods};
@@ -38,6 +39,7 @@ struct BoardApp {
 
     // other context stuff
     mode: Mode,
+    draw_bounds: bool,
     notifications: notifications::Notifications<notifications::MyNotification>,
 }
 
@@ -55,6 +57,7 @@ impl BoardApp {
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
 
             mode: Mode::LIGHT,
+            draw_bounds: false,
             notifications: notifications::Notifications::with_colour(DARK),
         })
     }
@@ -104,6 +107,9 @@ impl EventHandler for BoardApp {
         let mut canvas = graphics::Canvas::from_frame(ctx, self.background_colour());
 
         self.board.draw(&mut canvas, ctx);
+        if self.draw_bounds {
+            self.board.draw_bounds(&mut canvas, ctx)
+        }
 
         self.notifications.display_all(&mut canvas);
 
@@ -149,10 +155,10 @@ impl EventHandler for BoardApp {
             },
 
             Some(KeyCode::X) => {
-                if let Some(i) = self.board.selected() {
+                if let Some(Selectable::Item(i)) = self.board.selected() {
                     self.notifications.add(notifications::MyNotification::new(
                         format!("removed item {i} ({})", self.board.get(i).unwrap()),
-                        NOTIFICATION_TIME
+                        NOTIFICATION_TIME,
                     ));
 
                     self.board.remove(i)
@@ -164,6 +170,9 @@ impl EventHandler for BoardApp {
                     self.switch_colours()
                 }
             }
+
+            Some(KeyCode::Space) => self.draw_bounds = !self.draw_bounds,
+
             Some(KeyCode::Escape) => ctx.request_quit(),
 
             _ => {}
@@ -179,11 +188,26 @@ impl EventHandler for BoardApp {
         x: f32,
         y: f32,
     ) -> Result<(), ggez::GameError> {
-        if button == event::MouseButton::Left {
-            self.board.set_selection(self.board.select((x, y), ctx))
+        if button == event::MouseButton::Left || button == event::MouseButton::Right {
+            self.board
+                .set_last_press((x, y));
+
+            match self.board.select((x, y), ctx) {
+                Some(i) => self.board.set_selection(Selectable::Item(i)),
+                None => self.board.set_selection(Selectable::Board),
+            }
         }
 
         Ok(())
+    }
+
+    fn mouse_wheel_event(
+        &mut self,
+        _ctx: &mut Context,
+        _x: f32,
+        y: f32,
+    ) -> Result<(), ggez::GameError> {
+        self.board.camera.mouse_wheel_event(_ctx, _x, y)
     }
 
     fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
