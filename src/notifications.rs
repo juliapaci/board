@@ -1,3 +1,4 @@
+// TODO: maybe different display/update stuff for different levels of urgency
 pub trait Notification {
     fn update(&mut self, by: f32) -> bool;
     fn display(&self, canvas: &mut ggez::graphics::Canvas, colour: ggez::graphics::Color);

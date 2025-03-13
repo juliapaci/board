@@ -42,7 +42,7 @@ impl Camera {
 
         (
             view_offset.0 + self.resolution.0 / 2.0,
-            view_offset.1 - (self.zoom + self.resolution.1 / 2.0)
+            view_offset.1 - (self.zoom + self.resolution.1 / 2.0),
         )
     }
 

@@ -4,7 +4,8 @@ use ggez::graphics::{self, Color};
 use ggez::input::keyboard::{KeyCode, KeyMods};
 use ggez::{Context, ContextBuilder, GameResult};
 
-use copypasta::{ClipboardContext, ClipboardProvider};
+use cli_clipboard::{ClipboardContext, ClipboardProvider};
+use serde::{Deserialize, Serialize};
 
 mod board;
 mod camera;
@@ -27,71 +28,116 @@ fn main() {
     event::run(ctx, event_loop, app);
 }
 
+#[derive(Debug, Deserialize, Serialize, Default)]
 enum Mode {
+    #[default]
     LIGHT,
     DARK,
 }
 
-struct BoardApp {
-    board: board::board::Board,
-
-    clipboard: ClipboardContext,
+// TODO: probably move this to "store.rs"
+#[derive(Debug, Deserialize, Serialize, Default)]
+struct BoardAppState {
     mode: Mode,
-    notifications: notifications::Notifications<notifications::MyNotification>,
     // TODO: use bitfields
     draw_bounds: bool,
     draw_selection_info: bool,
 }
 
+struct BoardApp {
+    board: board::board::Board,
+    store_path: String,
+
+    clipboard: ClipboardContext,
+    notifications: notifications::Notifications<notifications::MyNotification>,
+    state: BoardAppState,
+}
+
+impl BoardAppState {
+    const STORE_CACHE_PATH: &str = "app_state.store";
+
+    fn new<P: AsRef<std::path::Path>>(store_path: P) -> Self {
+        match Self::read_cache(store_path) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("couldnt read board app state from cache: {e}");
+                Self::default()
+            }
+        }
+    }
+
+    fn read_cache<P: AsRef<std::path::Path>>(
+        store_path: P,
+    ) -> Result<BoardAppState, Box<dyn std::error::Error>> {
+        Ok(serde_json::from_str::<BoardAppState>(
+            &std::fs::read_to_string(store_path.as_ref().join(Self::STORE_CACHE_PATH))?,
+        )?)
+    }
+
+    fn save<P: AsRef<std::path::Path>>(
+        &self,
+        store_path: P,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+        let path = store_path.as_ref().join(Self::STORE_CACHE_PATH);
+
+        if let Ok(false) = std::fs::exists(&path) {
+            std::fs::File::create_new(&path)?;
+        }
+
+        let mut cache = std::fs::File::open(&path)?;
+        writeln!(cache, "{}", serde_json::to_string_pretty(self)?)?;
+
+        Ok(())
+    }
+}
+
 impl BoardApp {
     fn new(ctx: &mut Context) -> GameResult<Self> {
+        let default_store_path = "test_store".to_owned();
+        let args = std::env::args().collect::<Vec<String>>();
+
+        let store_path = args.get(1).unwrap_or(&default_store_path);
+
         Ok(Self {
-            board: board::board::Board::create(
-                std::env::args()
-                    .collect::<Vec<String>>()
-                    .get(1)
-                    .unwrap_or(&"test_store".to_owned()),
-                ctx,
-            )
-            .expect("couldnt create board"),
+            board: board::board::Board::create(store_path, ctx).expect("couldnt create board"),
+            store_path: store_path.clone(),
+
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
-            mode: Mode::LIGHT,
             notifications: notifications::Notifications::with_colour(DARK),
 
-            draw_bounds: false,
-            draw_selection_info: false,
+            state: BoardAppState::new(store_path),
         })
     }
 
     fn background_colour(&self) -> Color {
-        match self.mode {
+        match self.state.mode {
             Mode::LIGHT => LIGHT,
             Mode::DARK => DARK,
         }
     }
 
-    fn opposite_colour(&self) -> Color {
-        match self.mode {
-            Mode::LIGHT => DARK,
-            Mode::DARK => LIGHT,
-        }
-    }
-
     fn switch_colours(&mut self) {
-        match self.mode {
+        match self.state.mode {
             Mode::LIGHT => {
                 self.board.set_colours((DARK, LIGHT));
                 self.notifications.set_colour(LIGHT);
 
-                self.mode = Mode::DARK;
+                self.state.mode = Mode::DARK;
             }
             Mode::DARK => {
                 self.board.set_colours((LIGHT, DARK));
                 self.notifications.set_colour(DARK);
 
-                self.mode = Mode::LIGHT;
+                self.state.mode = Mode::LIGHT;
             }
         };
+    }
+
+    fn save(&mut self) -> std::io::Result<()> {
+        self.board.save()?;
+        self.state.save(&self.store_path)?;
+        Ok(())
     }
 }
 
@@ -108,10 +154,10 @@ impl EventHandler for BoardApp {
         let mut canvas = graphics::Canvas::from_frame(ctx, self.background_colour());
 
         self.board.draw(&mut canvas, ctx);
-        if self.draw_bounds {
+        if self.state.draw_bounds {
             self.board.draw_bounds(&mut canvas, ctx)
         }
-        if self.draw_selection_info {
+        if self.state.draw_selection_info {
             self.board.draw_selection_info(&mut canvas, ctx)
         }
 
@@ -127,12 +173,12 @@ impl EventHandler for BoardApp {
         repeated: bool,
     ) -> Result<(), ggez::GameError> {
         // dont care for holding anything down
-        if repeated {
+        if repeated || input.keycode.is_none() {
             return Ok(());
         }
 
-        match input.keycode {
-            Some(KeyCode::A) => {
+        match input.keycode.unwrap() {
+            KeyCode::A => {
                 if let Ok(s) = self.clipboard.get_contents() {
                     // TODO: pase a path -> load from file
                     if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
@@ -150,15 +196,17 @@ impl EventHandler for BoardApp {
                 }
             }
 
-            Some(KeyCode::S) => match self.board.save() {
-                Ok(_) => self.notifications.add(notifications::MyNotification::new(
-                    "board was saved".to_owned(),
-                    NOTIFICATION_TIME,
-                )),
-                Err(e) => println!("error while saving: {e}"),
-            },
+            KeyCode::S => {
+                match self.save() {
+                    Ok(_) => self.notifications.add(notifications::MyNotification::new(
+                        "board was saved".to_owned(),
+                        NOTIFICATION_TIME,
+                    )),
+                    Err(e) => println!("error while saving: {e}"),
+                }
+            }
 
-            Some(KeyCode::X) => {
+            KeyCode::X => {
                 if let Some(Selectable::Item(i)) = self.board.selected() {
                     self.notifications.add(notifications::MyNotification::new(
                         format!("removed item {i} ({})", self.board.get(i).unwrap()),
@@ -169,18 +217,34 @@ impl EventHandler for BoardApp {
                 }
             }
 
-            Some(KeyCode::Tab) => {
+            KeyCode::Tab => {
                 if input.mods.is_empty() {
                     self.switch_colours()
                 }
             }
 
-            Some(KeyCode::Space) => self.draw_bounds = !self.draw_bounds,
-            Some(KeyCode::D) => self.draw_selection_info = !self.draw_selection_info,
+            KeyCode::Space => self.state.draw_bounds = !self.state.draw_bounds,
+            KeyCode::D => self.state.draw_selection_info = !self.state.draw_selection_info,
 
-            Some(KeyCode::Escape) => ctx.request_quit(),
+            // TODO: make dynamic
+            KeyCode::H => self.notifications.add(notifications::MyNotification::new(
+                "
+Key         Action
+A           Add item from clipboard
+S           Save the board
+X           Delete the selected item
+Tab         switch between dark and light mode
+Space       Debug: show item bounds
+D           Debug: show selection information
+H           This help menu :)
+                "
+                .to_owned(),
+                NOTIFICATION_TIME,
+            )),
 
-            _ => {}
+            KeyCode::Escape => ctx.request_quit(),
+
+            _ => (),
         }
 
         Ok(())
@@ -226,7 +290,7 @@ impl EventHandler for BoardApp {
     }
 
     fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
-        self.board.save().expect("failed to save");
+        self.save().expect("failed to save");
         println!("auto saved the board");
 
         Ok(false)

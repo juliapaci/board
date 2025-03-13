@@ -219,7 +219,7 @@ impl Board {
             Err(e) => return Err(Box::new(e)),
         };
 
-        #[derive(Debug)]
+        #[derive(Debug, PartialOrd, PartialEq, Eq)]
         struct Image {
             url: String,
             resolution: (usize, usize),
@@ -230,20 +230,6 @@ impl Board {
                 self.resolution.cmp(&other.resolution)
             }
         }
-
-        impl PartialOrd for Image {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-
-        impl PartialEq for Image {
-            fn eq(&self, other: &Self) -> bool {
-                self.resolution == other.resolution
-            }
-        }
-
-        impl Eq for Image {}
 
         let mut image = Image {
             url: "".to_owned(),
