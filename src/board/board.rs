@@ -49,6 +49,7 @@ pub enum Selectable {
 }
 
 struct BoardState {
+    // in world coords
     last_press: (f32, f32),
     // index of selected item in items array
     selected: Option<Selectable>,
@@ -111,7 +112,7 @@ impl Board {
             items,
 
             state: BoardState::new(),
-            camera: Camera::default(),
+            camera: Camera::new(&ctx),
         })
     }
 
@@ -171,6 +172,42 @@ impl Board {
         });
     }
 
+    pub fn draw_selection_info(&self, c: &mut Canvas, cc: &Context) {
+        if self.state.selected.is_none() {
+            return;
+        }
+
+        let screen_last = self.camera.world_to_screen(self.state.last_press);
+        let world_mouse = self
+            .camera
+            .screen_to_world((cc.mouse.position().x, cc.mouse.position().y));
+
+        c.draw(
+            &graphics::Mesh::new_line(
+                cc,
+                &[[screen_last.0, screen_last.1].into(), cc.mouse.position()],
+                1.0,
+                Color::RED,
+            )
+            .expect("couldnt draw the selection lines"),
+            DrawParam::new(),
+        );
+
+        c.draw(
+            &graphics::Mesh::new_line(
+                cc,
+                &[
+                    [self.state.last_press.0, self.state.last_press.1].into(),
+                    [world_mouse.0, world_mouse.1],
+                ],
+                1.0,
+                Color::BLUE,
+            )
+            .expect("couldnt draw the selection lines"),
+            DrawParam::new(),
+        )
+    }
+
     // gets the image of the greatest resolution
     // TODO: use a proper html parser and give options
     //       of possible images to the user
@@ -217,30 +254,41 @@ impl Board {
         // backreferencing the delimiter would be optimal but alas i cant find a crate which supports it
         // ill prob end up implementing it on my own before switching to a real html parser
         let url_regex =
-            regex::Regex::new(r#"src(\s)*=(\s)*("|')?(http(s?)://.+\.(jpg|jpeg|png))("|')"#)
+            regex::Regex::new(r#"src(\s*)=(\s*)("|')?(http(s?)://.+\.(jpg|jpeg|png))("|')"#)
                 .unwrap();
-        let width_regex = regex::Regex::new(r"width(\s)*=(\s)*.([0-9]+).").unwrap();
-        let height_regex = regex::Regex::new(r"height(\s)*=(\s)*.([0-9]+).").unwrap();
+        let width_regex = regex::Regex::new(r"width(\s*)=(\s*).([0-9]+).").unwrap();
+        let height_regex = regex::Regex::new(r"height(\s*)=(\s*).([0-9]+).").unwrap();
         for m in img_regex.find_iter(&body) {
+            println!("\n");
             let s = m.as_str();
 
+            println!("{s}");
+
             let Some(url) = url_regex.captures(s) else {
+                println!("failed at url parsing");
                 continue;
             };
-            let Some(width) = width_regex.captures(s) else {
-                continue;
+            let url = &url[4];
+
+            let width = if let Some(cwidth) = width_regex.captures(s) {
+                cwidth[3].parse::<usize>().unwrap_or(0)
+            } else {
+                println!("failed at width parsing");
+                0
             };
-            let Some(height) = height_regex.captures(s) else {
-                continue;
+            let height = if let Some(cheight) = height_regex.captures(s) {
+                cheight[3].parse::<usize>().unwrap_or(0)
+            } else {
+                println!("failed at height parsing");
+                0
             };
 
             image = image.max(Image {
-                url: url[4].to_owned(),
-                resolution: (
-                    width[3].parse::<usize>().unwrap_or_default(),
-                    height[3].parse::<usize>().unwrap_or_default(),
-                ),
+                url: url.to_owned(),
+                resolution: (width, height),
             });
+
+            println!("{}, {}, {}\n\n", url.to_owned(), width, height);
         }
 
         Ok(image.url.to_owned())
@@ -284,7 +332,7 @@ impl Board {
     fn screen_iter<'a>(&'a self, c: &'a Context) -> impl Iterator<Item = &'a Item> {
         self.items
             .iter()
-            .filter(|i| self.camera.contains(i.to_rect(self.camera, c), c))
+            .filter(|i| self.camera.contains(i.to_rect(self.camera, c)))
     }
 
     /// index corresponding to the selected item
@@ -361,15 +409,27 @@ impl Board {
             }
 
             Selectable::Board => {
-                if c.mouse.button_pressed(MouseButton::Left) {
+                // zoom
+                if c.mouse.button_pressed(MouseButton::Left)
+                    && c.mouse.button_pressed(MouseButton::Right)
+                {
+                    self.camera.add_zoom((mdelta.0 + mdelta.1) / 100.0)
+                }
+                // pivot
+                else if c.mouse.button_pressed(MouseButton::Left) {
                     self.camera.centre = add_tuples(self.camera.centre, mdelta)
-                } else if c.mouse.button_pressed(MouseButton::Right) {
+                }
+                // glide
+                else if c.mouse.button_pressed(MouseButton::Right) {
                     self.camera.centre = add_tuples(
                         self.camera.centre,
-                        div_tuple(sub_tuples(
-                            self.state.last_press,
-                            (c.mouse.position().x, c.mouse.position().y),
-                        ), 10.0),
+                        div_tuple(
+                            sub_tuples(
+                                self.state.last_press,
+                                (c.mouse.position().x, c.mouse.position().y),
+                            ),
+                            10.0,
+                        ),
                     )
                 }
             }
@@ -407,7 +467,7 @@ impl Board {
     }
 
     pub fn set_last_press(&mut self, p: (f32, f32)) {
-        self.state.last_press = p;
+        self.state.last_press = self.camera.screen_to_world(p);
     }
 }
 

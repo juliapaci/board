@@ -33,14 +33,14 @@ enum Mode {
 }
 
 struct BoardApp {
-    // board stuff
     board: board::board::Board,
-    clipboard: ClipboardContext,
 
-    // other context stuff
+    clipboard: ClipboardContext,
     mode: Mode,
-    draw_bounds: bool,
     notifications: notifications::Notifications<notifications::MyNotification>,
+    // TODO: use bitfields
+    draw_bounds: bool,
+    draw_selection_info: bool,
 }
 
 impl BoardApp {
@@ -55,10 +55,11 @@ impl BoardApp {
             )
             .expect("couldnt create board"),
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
-
             mode: Mode::LIGHT,
-            draw_bounds: false,
             notifications: notifications::Notifications::with_colour(DARK),
+
+            draw_bounds: false,
+            draw_selection_info: false,
         })
     }
 
@@ -109,6 +110,9 @@ impl EventHandler for BoardApp {
         self.board.draw(&mut canvas, ctx);
         if self.draw_bounds {
             self.board.draw_bounds(&mut canvas, ctx)
+        }
+        if self.draw_selection_info {
+            self.board.draw_selection_info(&mut canvas, ctx)
         }
 
         self.notifications.display_all(&mut canvas);
@@ -172,6 +176,7 @@ impl EventHandler for BoardApp {
             }
 
             Some(KeyCode::Space) => self.draw_bounds = !self.draw_bounds,
+            Some(KeyCode::D) => self.draw_selection_info = !self.draw_selection_info,
 
             Some(KeyCode::Escape) => ctx.request_quit(),
 
@@ -188,9 +193,10 @@ impl EventHandler for BoardApp {
         x: f32,
         y: f32,
     ) -> Result<(), ggez::GameError> {
-        if button == event::MouseButton::Left || button == event::MouseButton::Right {
-            self.board
-                .set_last_press((x, y));
+        if self.board.selected().is_none()
+            && (button == event::MouseButton::Left || button == event::MouseButton::Right)
+        {
+            self.board.set_last_press((x, y));
 
             match self.board.select((x, y), ctx) {
                 Some(i) => self.board.set_selection(Selectable::Item(i)),
@@ -208,6 +214,15 @@ impl EventHandler for BoardApp {
         y: f32,
     ) -> Result<(), ggez::GameError> {
         self.board.camera.mouse_wheel_event(_ctx, _x, y)
+    }
+
+    fn resize_event(
+        &mut self,
+        _ctx: &mut Context,
+        width: f32,
+        height: f32,
+    ) -> Result<(), ggez::GameError> {
+        Ok(self.board.camera.resolution = (width, height))
     }
 
     fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
