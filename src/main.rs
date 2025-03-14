@@ -74,10 +74,7 @@ impl BoardAppState {
         )?)
     }
 
-    fn save<P: AsRef<std::path::Path>>(
-        &self,
-        store_path: P,
-    ) -> std::io::Result<()> {
+    fn save<P: AsRef<std::path::Path>>(&self, store_path: P) -> std::io::Result<()> {
         use std::io::Write;
         let path = store_path.as_ref().join(Self::STORE_CACHE_PATH);
 
@@ -85,8 +82,8 @@ impl BoardAppState {
             std::fs::File::create_new(&path)?;
         }
 
-        let mut cache = std::fs::File::open(&path)?;
-        writeln!(cache, "{}", serde_json::to_string_pretty(self)?)?;
+        let mut cache = std::fs::OpenOptions::new().write(true).open(&path)?;
+        write!(cache, "{}\n", serde_json::to_string_pretty(self)?)?;
 
         Ok(())
     }
@@ -107,7 +104,8 @@ impl BoardApp {
             notifications: notifications::Notifications::with_colour(DARK),
 
             state: BoardAppState::new(store_path),
-        })
+        }
+        .with_proper_colours())
     }
 
     fn background_colour(&self) -> Color {
@@ -132,6 +130,13 @@ impl BoardApp {
                 self.state.mode = Mode::LIGHT;
             }
         };
+    }
+
+    fn with_proper_colours(mut self) -> Self {
+        // swapping twice because although we read in the `mode` state from a cache it doesnt effect existing colours
+        self.switch_colours();
+        self.switch_colours();
+        self
     }
 
     fn save(&mut self) -> std::io::Result<()> {
@@ -180,31 +185,34 @@ impl EventHandler for BoardApp {
         match input.keycode.unwrap() {
             KeyCode::A => {
                 if let Ok(s) = self.clipboard.get_contents() {
-                    // TODO: pase a path -> load from file
+                    let mut success = true;
+                    // TODO: paste a path -> load from file
                     if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
                         self.board.add_text(s);
                     } else {
                         if let Err(e) = self.board.add_image(&s, ctx) {
+                            // TODO: possibly notify the user?
                             println!("Error: {e}");
+                            success = false;
                         }
                     }
 
-                    self.notifications.add(notifications::MyNotification::new(
-                        format!("added {}", self.board.get(self.board.len() - 1).unwrap()),
-                        NOTIFICATION_TIME,
-                    ));
+                    if success {
+                        self.notifications.add(notifications::MyNotification::new(
+                            format!("added {}", self.board.get(self.board.len() - 1).unwrap()),
+                            NOTIFICATION_TIME,
+                        ));
+                    }
                 }
             }
 
-            KeyCode::S => {
-                match self.save() {
-                    Ok(_) => self.notifications.add(notifications::MyNotification::new(
-                        "board was saved".to_owned(),
-                        NOTIFICATION_TIME,
-                    )),
-                    Err(e) => println!("error while saving: {e}"),
-                }
-            }
+            KeyCode::S => match self.save() {
+                Ok(_) => self.notifications.add(notifications::MyNotification::new(
+                    "board was saved".to_owned(),
+                    NOTIFICATION_TIME,
+                )),
+                Err(e) => println!("error while saving: {e}"),
+            },
 
             KeyCode::X => {
                 if let Some(Selectable::Item(i)) = self.board.selected() {

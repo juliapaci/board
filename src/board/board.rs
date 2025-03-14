@@ -44,16 +44,18 @@ pub enum Item {
 
 #[derive(Clone, Copy)]
 pub enum Selectable {
-    Item(usize), // for item management
-    Board,       // for camera movements
+    /// for item management
+    Item(usize),
+    /// for camera movements
+    Board,
 }
 
 struct BoardState {
-    // in world coords
+    /// in world coords
     last_press: (f32, f32),
-    // index of selected item in items array
+    /// index of selected item in items array
     selected: Option<Selectable>,
-    // (background, text) colours
+    /// (background, text) colours
     colours: (Color, Color),
 }
 
@@ -74,12 +76,16 @@ impl BoardState {
 pub struct Board {
     store: Store,
     items: Vec<Item>,
+    // TODO: prob should just use `Image` instead of `ItemImage`
+    choices: Vec<(Option<ItemImage>, String)>,
 
     pub camera: Camera,
     state: BoardState,
 }
 
 impl Board {
+    const CHOICE_AMOUNT: usize = 4;
+
     pub fn create<P: AsRef<std::path::Path>>(
         store_path: P,
         ctx: &mut Context,
@@ -110,6 +116,7 @@ impl Board {
         Ok(Self {
             store,
             items,
+            choices: Vec::default(),
 
             state: BoardState::new(),
             camera: Camera::new(&ctx),
@@ -121,19 +128,32 @@ impl Board {
         self.items.push(Item::Text(ItemText::new(text)));
     }
 
-    #[inline]
     pub fn add_image(
         &mut self,
         url: &str,
         ctx: &Context,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.items.push(Item::Image(Self::image_from_url(
-            &self.store,
-            &Self::get_image_source_from_url(url)?,
-            ctx,
-        )?));
+        self.add_choices_from_url(url)?;
+        self.add_choices_images(ctx);
 
         Ok(())
+    }
+
+    /// adds the images for each choice up to [`Self::CHOICE_AMOUNT`]
+    pub fn add_choices_images(
+        &mut self,
+        ctx: &Context
+    ) {
+        for c in self.choices.iter_mut().skip_while(|c| c.0.is_some()).take(Self::CHOICE_AMOUNT) {
+            *c = (
+                Self::image_from_url(
+                    &self.store,
+                    &c.1,
+                    ctx,
+                ).ok(),
+                c.1.clone(),
+            )
+        }
     }
 
     pub fn draw(&self, c: &mut Canvas, cc: &Context) {
@@ -208,76 +228,24 @@ impl Board {
         )
     }
 
-    // gets the image of the greatest resolution
-    // TODO: use a proper html parser and give options
-    //       of possible images to the user
-    fn get_image_source_from_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let body;
-
-        match reqwest::blocking::get(url) {
-            Ok(b) => body = b.text()?,
-            Err(e) => return Err(Box::new(e)),
-        };
-
-        #[derive(Debug, PartialOrd, PartialEq, Eq)]
-        struct Image {
-            url: String,
-            resolution: (usize, usize),
-        }
-        use std::cmp::*;
-        impl Ord for Image {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.resolution.cmp(&other.resolution)
-            }
-        }
-
-        let mut image = Image {
-            url: "".to_owned(),
-            resolution: (0, 0),
-        };
-
+    /// gets a list of images from a web source and adds their urls to the choice list
+    fn add_choices_from_url(&mut self, url: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let body = reqwest::blocking::get(url)?.text()?;
         let img_regex = regex::Regex::new("<img.*>").unwrap();
-        // backreferencing the delimiter would be optimal but alas i cant find a crate which supports it
-        // ill prob end up implementing it on my own before switching to a real html parser
         let url_regex =
             regex::Regex::new(r#"src(\s*)=(\s*)("|')?(http(s?)://.+\.(jpg|jpeg|png))("|')"#)
                 .unwrap();
-        let width_regex = regex::Regex::new(r"width(\s*)=(\s*).([0-9]+).").unwrap();
-        let height_regex = regex::Regex::new(r"height(\s*)=(\s*).([0-9]+).").unwrap();
+
         for m in img_regex.find_iter(&body) {
-            println!("\n");
-            let s = m.as_str();
-
-            println!("{s}");
-
-            let Some(url) = url_regex.captures(s) else {
+            let Some(url) = url_regex.captures(m.as_str()) else {
                 println!("failed at url parsing");
                 continue;
             };
-            let url = &url[4];
-
-            let width = if let Some(cwidth) = width_regex.captures(s) {
-                cwidth[3].parse::<usize>().unwrap_or(0)
-            } else {
-                println!("failed at width parsing");
-                0
-            };
-            let height = if let Some(cheight) = height_regex.captures(s) {
-                cheight[3].parse::<usize>().unwrap_or(0)
-            } else {
-                println!("failed at height parsing");
-                0
-            };
-
-            image = image.max(Image {
-                url: url.to_owned(),
-                resolution: (width, height),
-            });
-
-            println!("{}, {}, {}\n\n", url.to_owned(), width, height);
+            println!("{}", url[4].to_owned());
+            self.choices.push((None, url[4].to_owned()));
         }
 
-        Ok(image.url.to_owned())
+        Ok(())
     }
 
     #[inline]
@@ -285,6 +253,7 @@ impl Board {
         url.split('/').last().unwrap_or(url)
     }
 
+    /// downloads image from url, caches it in our storage, gives a handle to it
     pub fn image_from_url(
         store: &Store,
         url: &str,
