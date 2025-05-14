@@ -17,13 +17,18 @@ pub(crate) const DARK: Color = Color::new(36. / 255., 34. / 255., 34. / 255., 1.
 const NOTIFICATION_TIME: f32 = std::f32::consts::FRAC_PI_2;
 
 fn main() {
-    let (mut ctx, event_loop) = ContextBuilder::new("board", "")
+    let default_store_path = "test_store".to_owned();
+    let args = std::env::args().collect::<Vec<String>>();
+    let store_path = args.get(1).unwrap_or(&default_store_path);
+
+    let (mut ctx, event_loop) = ContextBuilder::new(&format!("board - {store_path}"), "")
         .add_resource_path(std::path::PathBuf::from("."))
+        .add_resource_path(std::path::PathBuf::from(store_path).join(".."))
         .window_mode(ggez::conf::WindowMode::default().resizable(true))
         .build()
         .expect("couldnt create ggez context");
 
-    let app = BoardApp::new(&mut ctx).unwrap();
+    let app = BoardApp::new(store_path, &mut ctx).unwrap();
 
     event::run(ctx, event_loop, app);
 }
@@ -90,15 +95,10 @@ impl BoardAppState {
 }
 
 impl BoardApp {
-    fn new(ctx: &mut Context) -> GameResult<Self> {
-        let default_store_path = "test_store".to_owned();
-        let args = std::env::args().collect::<Vec<String>>();
-
-        let store_path = args.get(1).unwrap_or(&default_store_path);
-
+    fn new(store_path: &str, ctx: &mut Context) -> GameResult<Self> {
         Ok(Self {
             board: board::board::Board::create(store_path, ctx).expect("couldnt create board"),
-            store_path: store_path.clone(),
+            store_path: store_path.to_owned(),
 
             clipboard: ClipboardContext::new().expect("couldnt create clipboard"),
             notifications: notifications::Notifications::with_colour(DARK),

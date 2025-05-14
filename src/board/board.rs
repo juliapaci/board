@@ -373,7 +373,7 @@ impl Board {
             (t.0 / f, t.1 / f)
         }
 
-        let mdelta = (c.mouse.delta().x, c.mouse.delta().y);
+        let mdelta = div_tuple((c.mouse.delta().x, c.mouse.delta().y), self.camera.zoom);
         match self.state.selected.unwrap() {
             Selectable::Item(i) => {
                 let item = &mut self.items[i];
@@ -426,9 +426,10 @@ impl Board {
                         div_tuple(
                             sub_tuples(
                                 self.state.last_press,
-                                self.camera.screen_to_world(
+                                self.camera.screen_to_world(div_tuple(
                                     (c.mouse.position().x, c.mouse.position().y),
-                                )
+                                    self.camera.zoom
+                                ))
                             ),
                             10.0,
                         ),

@@ -53,7 +53,7 @@ impl Store {
                             .or(Err("failed to load image from path"))?
                     } else {
                         board::ItemImage::image_from_url(self, i.kind.argument(), c)
-                            .or(Err("get_image_from_url failed"))?
+                            .or(Err("image_from_url failed"))?
                     },
                 )
                 .with_position(i.position)
