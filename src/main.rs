@@ -184,25 +184,28 @@ impl EventHandler for BoardApp {
 
         match input.keycode.unwrap() {
             KeyCode::A => {
-                if let Ok(s) = self.clipboard.get_contents() {
-                    let mut success = true;
-                    // TODO: paste a path -> load from file
-                    if !s.starts_with("http") || input.mods.contains(KeyMods::SHIFT) {
-                        self.board.add_text(s);
-                    } else {
-                        if let Err(e) = self.board.add_image(&s, ctx) {
-                            // TODO: possibly notify the user?
-                            println!("Error: {e}");
-                            success = false;
-                        }
-                    }
+                let Ok(s) = self.clipboard.get_contents() else {
+                    return Ok(());
+                };
+                let mut success = true;
 
-                    if success {
-                        self.notifications.add(notifications::MyNotification::new(
-                            format!("added {}", self.board.get(self.board.len() - 1).unwrap()),
-                            NOTIFICATION_TIME,
-                        ));
+                let kind = board::board::ImageType::type_from_argument(&s);
+
+                if kind.argument().is_empty() || input.mods.contains(KeyMods::SHIFT) {
+                    self.board.add_text(s);
+                } else {
+                    if let Err(e) = self.board.add_image(kind, ctx) {
+                        // TODO: possibly notify the user?
+                        println!("Error: {e}");
+                        success = false;
                     }
+                }
+
+                if success {
+                    self.notifications.add(notifications::MyNotification::new(
+                        format!("added {}", self.board.get(self.board.len() - 1).unwrap()),
+                        NOTIFICATION_TIME,
+                    ));
                 }
             }
 

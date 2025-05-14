@@ -15,6 +15,14 @@ use serde::{Deserialize, Serialize};
 // position is in pixels
 
 #[derive(Debug, Serialize, Deserialize)]
+pub enum ImageType {
+    Web(String),    // url (from a web page)
+    Online(String), // url (directly an image)
+    // TODO: not sure if local argument should hold the cached location (so just the name) or the actual path. probs the absolute path since we can always infer the cache location but idk
+    Local(String),  // path
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ItemImage {
     /// path to cached item
     /// only optional because of serialisation
@@ -24,7 +32,7 @@ pub struct ItemImage {
     pub scale: (f32, f32),
     pub rotation: f32,
 
-    pub url: String,
+    pub kind: ImageType,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -83,6 +91,33 @@ pub struct Board {
     state: BoardState,
 }
 
+impl ImageType {
+    #[inline]
+    /// returns empty argument if no matches
+    pub fn type_from_argument(argument: &str) -> Self {
+        if argument.starts_with("http") {
+            if argument.ends_with(".png")
+                || argument.ends_with(".jpg")
+                || argument.ends_with(".jpeg")
+                || argument.ends_with(".gif")
+            { ImageType::Online(argument.to_owned()) }
+
+            else { ImageType::Web(argument.to_owned()) }
+        }
+        else if argument.starts_with("/") { ImageType::Local(argument.to_owned()) }
+        else { ImageType::Local("".to_owned()) }
+    }
+
+    #[inline]
+    pub fn argument(&self) -> &str {
+        match self {
+            ImageType::Web(url) => &url,
+            ImageType::Online(url) => &url,
+            ImageType::Local(path) => &path
+        }
+    }
+}
+
 impl Board {
     const CHOICE_AMOUNT: usize = 4;
 
@@ -130,27 +165,37 @@ impl Board {
 
     pub fn add_image(
         &mut self,
-        url: &str,
+        kind: ImageType,
         ctx: &Context,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.add_choices_from_url(url)?;
-        self.add_choices_images(ctx);
+        match kind {
+            ImageType::Web(url) => {
+                self.add_choices_from_url(&url)?;
+                self.add_choices_images(ctx);
+            }
+            ImageType::Online(url) => {
+                self.items
+                    .push(Item::Image(ItemImage::image_from_url(&self.store, &url, ctx)?));
+            }
+            ImageType::Local(path) => {
+                self.items
+                    .push(Item::Image(ItemImage::image_from_path(&self.store, &path, ctx)?));
+            }
+        }
 
         Ok(())
     }
 
     /// adds the images for each choice up to [`Self::CHOICE_AMOUNT`]
-    pub fn add_choices_images(
-        &mut self,
-        ctx: &Context
-    ) {
-        for c in self.choices.iter_mut().skip_while(|c| c.0.is_some()).take(Self::CHOICE_AMOUNT) {
+    pub fn add_choices_images(&mut self, ctx: &Context) {
+        for c in self
+            .choices
+            .iter_mut()
+            .skip_while(|c| c.0.is_some())
+            .take(Self::CHOICE_AMOUNT)
+        {
             *c = (
-                Self::image_from_url(
-                    &self.store,
-                    &c.1,
-                    ctx,
-                ).ok(),
+                ItemImage::image_from_url(&self.store, &c.1, ctx).ok(),
                 c.1.clone(),
             )
         }
@@ -232,16 +277,18 @@ impl Board {
     fn add_choices_from_url(&mut self, url: &str) -> Result<(), Box<dyn std::error::Error>> {
         let body = reqwest::blocking::get(url)?.text()?;
         let img_regex = regex::Regex::new("<img.*>").unwrap();
+        // [4] would be the url
         let url_regex =
-            regex::Regex::new(r#"src(\s*)=(\s*)("|')?(http(s?)://.+\.(jpg|jpeg|png))("|')"#)
+            regex::Regex::new(r#"src(\s*)=(\s*)("|')((http(s?):)?//(\?|.[^("|')])+)("|') "#)
                 .unwrap();
 
         for m in img_regex.find_iter(&body) {
             let Some(url) = url_regex.captures(m.as_str()) else {
-                println!("failed at url parsing");
+                println!("failed at url parsing for: {}", m.as_str());
                 continue;
             };
-            println!("{}", url[4].to_owned());
+
+            println!("url: {}", url[4].to_owned());
             self.choices.push((None, url[4].to_owned()));
         }
 
@@ -249,23 +296,8 @@ impl Board {
     }
 
     #[inline]
-    pub fn name_from_url(url: &str) -> &str {
-        url.split('/').last().unwrap_or(url)
-    }
-
-    /// downloads image from url, caches it in our storage, gives a handle to it
-    pub fn image_from_url(
-        store: &Store,
-        url: &str,
-        ctx: &Context,
-    ) -> Result<ItemImage, Box<dyn std::error::Error>> {
-        let img_bytes = reqwest::blocking::get(url)?.bytes()?.to_vec();
-
-        let path = store.cache.join(Self::name_from_url(url));
-        let mut file = std::fs::File::create(&path)?;
-        file.write(&img_bytes)?;
-
-        ItemImage::from_path(store, url, ctx).map_err(Box::from)
+    pub fn name_from_path(path: &str) -> &str {
+        path.split('/').last().unwrap_or(path)
     }
 
     pub fn set_selection(&mut self, selection: Selectable) {
@@ -427,13 +459,13 @@ impl Board {
 }
 
 impl ItemImage {
-    pub fn new(handle: Image, url: String) -> Self {
+    pub fn new(handle: Image, argument: &str) -> Self {
         Self {
             handle: Some(handle),
             position: (0., 0.),
             scale: (1., 1.),
             rotation: 0.,
-            url,
+            kind: ImageType::type_from_argument(argument),
         }
     }
 
@@ -465,6 +497,7 @@ impl ItemImage {
                 .color(Color::WHITE),
         );
     }
+
     pub fn to_rect(&self, cam: Camera) -> (f32, f32, f32, f32) {
         (
             self.world_position(cam).0,
@@ -474,15 +507,41 @@ impl ItemImage {
         )
     }
 
-    pub fn from_path(store: &Store, url: &str, ctx: &Context) -> ggez::GameResult<Self> {
+    /// downloads image from url, caches it in our storage, gives a handle to it
+    pub fn image_from_url(
+        store: &Store,
+        url: &str,
+        ctx: &Context,
+    ) -> Result<ItemImage, Box<dyn std::error::Error>> {
+        let img_bytes = reqwest::blocking::get(url)?.bytes()?.to_vec();
+
+        let path = store.cache.join(Board::name_from_path(url));
+        let mut file = std::fs::File::create(&path)?;
+        file.write(&img_bytes)?;
+
+        ItemImage::from_path(store, url, ctx).map_err(Box::from)
+    }
+
+    pub fn image_from_path(
+        store: &Store,
+        path: &str,
+        ctx: &Context,
+    ) -> Result<ItemImage, Box<dyn std::error::Error>> {
+        let cache_path = store.cache.join(Board::name_from_path(path));
+        std::fs::copy(path, cache_path)?;
+
+        ItemImage::from_path(store, path, ctx).map_err(Box::from)
+    }
+
+    pub fn from_path(store: &Store, argument: &str, ctx: &Context) -> ggez::GameResult<Self> {
         Ok(ItemImage::new(
             graphics::Image::from_path(
                 ctx,
                 std::path::PathBuf::from("/")
                     .join(store.cache.clone())
-                    .join(Board::name_from_url(url)),
+                    .join(Board::name_from_path(argument)),
             )?,
-            url.to_owned(),
+            argument,
         ))
     }
 }

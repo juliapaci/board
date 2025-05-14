@@ -48,11 +48,11 @@ impl Store {
             match serde_json::from_str(line).or(Err("from_str failed"))? {
                 Item::Text(i) => Item::Text(i),
                 Item::Image(i) => {
-                    Item::Image(if self.is_cached(board::Board::name_from_url(&i.url)) {
-                        board::ItemImage::from_path(self, &i.url, c)
+                    Item::Image(if self.is_cached(board::Board::name_from_path(i.kind.argument())) {
+                        board::ItemImage::from_path(self, i.kind.argument(), c)
                             .or(Err("failed to load image from path"))?
                     } else {
-                        board::Board::image_from_url(self, &i.url, c)
+                        board::ItemImage::image_from_url(self, i.kind.argument(), c)
                             .or(Err("get_image_from_url failed"))?
                     })
                     .with_position(i.position)
