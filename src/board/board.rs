@@ -19,7 +19,7 @@ pub enum ImageType {
     Web(String),    // url (from a web page)
     Online(String), // url (directly an image)
     // TODO: not sure if local argument should hold the cached location (so just the name) or the actual path. probs the absolute path since we can always infer the cache location but idk
-    Local(String),  // path
+    Local(String), // path
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,12 +100,16 @@ impl ImageType {
                 || argument.ends_with(".jpg")
                 || argument.ends_with(".jpeg")
                 || argument.ends_with(".gif")
-            { ImageType::Online(argument.to_owned()) }
-
-            else { ImageType::Web(argument.to_owned()) }
+            {
+                ImageType::Online(argument.to_owned())
+            } else {
+                ImageType::Web(argument.to_owned())
+            }
+        } else if argument.starts_with("/") {
+            ImageType::Local(argument.to_owned())
+        } else {
+            ImageType::Local("".to_owned())
         }
-        else if argument.starts_with("/") { ImageType::Local(argument.to_owned()) }
-        else { ImageType::Local("".to_owned()) }
     }
 
     #[inline]
@@ -113,7 +117,7 @@ impl ImageType {
         match self {
             ImageType::Web(url) => &url,
             ImageType::Online(url) => &url,
-            ImageType::Local(path) => &path
+            ImageType::Local(path) => &path,
         }
     }
 }
@@ -174,12 +178,18 @@ impl Board {
                 self.add_choices_images(ctx);
             }
             ImageType::Online(url) => {
-                self.items
-                    .push(Item::Image(ItemImage::image_from_url(&self.store, &url, ctx)?));
+                self.items.push(Item::Image(ItemImage::image_from_url(
+                    &self.store,
+                    &url,
+                    ctx,
+                )?));
             }
             ImageType::Local(path) => {
-                self.items
-                    .push(Item::Image(ItemImage::image_from_path(&self.store, &path, ctx)?));
+                self.items.push(Item::Image(ItemImage::image_from_path(
+                    &self.store,
+                    &path,
+                    ctx,
+                )?));
             }
         }
 
@@ -242,7 +252,7 @@ impl Board {
             return;
         }
 
-        let screen_last = self.camera.world_to_screen(self.state.last_press);
+        let screen_last = self.last_press_screen();
         let world_mouse = self
             .camera
             .screen_to_world((cc.mouse.position().x, cc.mouse.position().y));
@@ -298,6 +308,8 @@ impl Board {
     #[inline]
     pub fn name_from_path(path: &str) -> &str {
         path.split('/').last().unwrap_or(path)
+        // sometimes urls have params so we dont want those
+        // &name[0..name.find('?').unwrap_or(name.len()-1)]
     }
 
     pub fn set_selection(&mut self, selection: Selectable) {
@@ -366,6 +378,7 @@ impl Board {
             Selectable::Item(i) => {
                 let item = &mut self.items[i];
 
+                // TODO: like proper square scale if shift is held
                 // scale
                 if c.keyboard.is_key_pressed(KeyCode::E)
                     || (c.mouse.button_pressed(MouseButton::Left)
@@ -413,7 +426,9 @@ impl Board {
                         div_tuple(
                             sub_tuples(
                                 self.state.last_press,
-                                (c.mouse.position().x, c.mouse.position().y),
+                                self.camera.screen_to_world(
+                                    (c.mouse.position().x, c.mouse.position().y),
+                                )
                             ),
                             10.0,
                         ),
@@ -423,13 +438,25 @@ impl Board {
         }
     }
 
+    pub fn last_press_screen(&self) -> (f32, f32) {
+        self.camera.world_to_screen(self.state.last_press)
+    }
+
     pub fn selected(&self) -> Option<Selectable> {
         self.state.selected
     }
 
-    pub fn remove(&mut self, i: usize) {
+    pub fn remove(&mut self, i: usize) -> std::io::Result<()> {
+        let item = &self.items[i];
+        match item {
+            Item::Image(i) => self.store.remove_cached(i.kind.argument())?,
+            _ => {}
+        }
+
         self.items.remove(i);
         self.state.selected = None;
+
+        Ok(())
     }
 
     pub fn get(&self, i: usize) -> Option<&Item> {

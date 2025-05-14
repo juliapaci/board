@@ -224,7 +224,7 @@ impl EventHandler for BoardApp {
                         NOTIFICATION_TIME,
                     ));
 
-                    self.board.remove(i)
+                    self.board.remove(i)?
                 }
             }
 
@@ -240,10 +240,13 @@ impl EventHandler for BoardApp {
             // TODO: make dynamic
             KeyCode::H => self.notifications.add(notifications::MyNotification::new(
                 "
-Key         Action
+Key, Mouse  Action
 A           Add item from clipboard
 S           Save the board
 X           Delete the selected item
+E, R+L      Scale the selected item
+R, R        Scale the selected item
+ , R+L / SW Zoom
 Tab         switch between dark and light mode
 Space       Debug: show item bounds
 D           Debug: show selection information

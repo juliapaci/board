@@ -47,18 +47,18 @@ impl Store {
         Ok(
             match serde_json::from_str(line).or(Err("from_str failed"))? {
                 Item::Text(i) => Item::Text(i),
-                Item::Image(i) => {
-                    Item::Image(if self.is_cached(board::Board::name_from_path(i.kind.argument())) {
+                Item::Image(i) => Item::Image(
+                    if self.is_cached(board::Board::name_from_path(i.kind.argument())) {
                         board::ItemImage::from_path(self, i.kind.argument(), c)
                             .or(Err("failed to load image from path"))?
                     } else {
                         board::ItemImage::image_from_url(self, i.kind.argument(), c)
                             .or(Err("get_image_from_url failed"))?
-                    })
-                    .with_position(i.position)
-                    .with_scale(i.scale)
-                    .with_rotation(i.rotation)
-                }
+                    },
+                )
+                .with_position(i.position)
+                .with_scale(i.scale)
+                .with_rotation(i.rotation),
             },
         )
     }
@@ -71,5 +71,14 @@ impl Store {
     #[inline]
     pub fn is_cached(&self, name: &str) -> bool {
         self.cache.join(name).exists()
+    }
+
+    #[inline]
+    pub fn remove_cached(&self, name: &str) -> std::io::Result<()> {
+        if self.is_cached(name) {
+            std::fs::remove_file(self.cache.join(name))
+        } else {
+            Ok(())
+        }
     }
 }
